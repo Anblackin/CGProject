@@ -1,0 +1,21 @@
+{
+  "view_extent": 4.0,
+  "display_scale": 2.8,
+  "bodies": [
+    {
+      "id": "sun", "name": "The Ember", "mass": 10.0, "radius": 0.1,
+      "position": [0.0, 0.0], "velocity": [0.0, 0.0],
+      "appearance": {"seed": 1, "primary": "#f5bf74", "secondary": "#d3574a", "bands": 4, "terrain": 0.4, "clouds": 0.05}
+    },
+    {
+      "id": "a", "name": "Aqua", "mass": 1.0, "radius": 0.1,
+      "position": [2.0, 0.0], "velocity": [-0.5, 0.0],
+      "appearance": {"seed": 27, "primary": "#63c6c8", "secondary": "#226281", "bands": 8, "terrain": 0.6, "clouds": 0.32}
+    },
+    {
+      "id": "b", "name": "Ochre", "mass": 2.0, "radius": 0.1,
+      "position": [2.5, 0.0], "velocity": [-1.0, 0.0],
+      "appearance": {"seed": 108, "primary": "#e49c70", "secondary": "#884f71", "bands": 11, "terrain": 0.75, "ring_width": 0.65}
+    }
+  ]
+}

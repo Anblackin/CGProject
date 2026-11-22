@@ -1,0 +1,26 @@
+{
+  "view_extent": 5.0,
+  "display_scale": 2.7,
+  "bodies": [
+    {
+      "id": "sun", "name": "The Ember", "mass": 75.0, "radius": 0.25,
+      "position": [0.0, 0.0], "velocity": [0.0, 0.0],
+      "appearance": {"seed": 1, "primary": "#f5bf74", "secondary": "#d3574a", "bands": 4, "terrain": 0.4, "clouds": 0.05, "ring_width": 0}
+    },
+    {
+      "id": "aqua", "name": "Aqua", "mass": 0.6, "radius": 0.16,
+      "position": [2.5, 0.0], "velocity": [0.0, 5.6],
+      "appearance": {"seed": 27, "primary": "#63c6c8", "secondary": "#226281", "bands": 8, "terrain": 0.6, "clouds": 0.32, "ring_width": 0}
+    },
+    {
+      "id": "ochre", "name": "Ochre", "mass": 0.8, "radius": 0.2,
+      "position": [-3.2, 0.0], "velocity": [0.0, -4.8],
+      "appearance": {"seed": 108, "primary": "#e49c70", "secondary": "#884f71", "bands": 11, "terrain": 0.75, "clouds": 0.07, "ring_width": 0.65}
+    },
+    {
+      "id": "moss", "name": "Moss", "mass": 0.4, "radius": 0.13,
+      "position": [0.0, 4.0], "velocity": [-3.9, 0.0],
+      "appearance": {"seed": 312, "primary": "#a7bd78", "secondary": "#406b6b", "bands": 7, "terrain": 0.85, "clouds": 0.21, "ring_width": 0}
+    }
+  ]
+}
