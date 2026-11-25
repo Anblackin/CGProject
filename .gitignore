@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-build/
-=======
 /build/
 /build-*/
 *.ppm
@@ -22,4 +19,3 @@ Thumbs.db
 /.agents/
 /skills/
 /superpowers/
->>>>>>> 09a22e602e39989b1d259e3d972c91bfd06abd04
