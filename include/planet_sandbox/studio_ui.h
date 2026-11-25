@@ -118,6 +118,8 @@ struct StudioState {
     std::string notice;
     int selected = 0;
     bool design_view = false;
+    // Simulation camera follows a stable body ID without altering the scene.
+    std::string simulation_follow_id;
     bool compare_baseline = false;
     bool show_reference_orbit = true;
     double timeline_horizon = 80.0;

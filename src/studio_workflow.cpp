@@ -24,7 +24,9 @@ StudioWorkflow studio_workflow(const StudioState& state) {
     } else if (state.session.mode() == SessionMode::Simulate) {
         result.stage = StudioWorkflowStage::Simulation;
         result.title = "Simulating / " + name;
-        result.hint = "Select a planet to follow its orbit; select a collision to replay. Return to Design to edit.";
+        result.hint = state.simulation_follow_id.empty()
+            ? "Select a planet for a tracking close-up; select a collision to replay. Return to Design to edit."
+            : "Following selected planet. Right drag: rotate. Scroll: zoom. Back to system: overview.";
     } else if (state.design_view) {
         result.stage = StudioWorkflowStage::Design;
         result.title = "Designing / " + name;
