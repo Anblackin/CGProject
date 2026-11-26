@@ -2,7 +2,11 @@
 #include "planet_sandbox/solar_system.h"
 
 extern "C" {
+#if defined(_MSC_VER)
+#define restrict __restrict
+#else
 #define restrict __restrict__
+#endif
 #include <rebound.h>
 #undef restrict
 }

@@ -115,6 +115,8 @@ static void test_atomic_save_and_recovery_preserve_source_and_validate_drafts() 
     assert(offer && offer->document == draft && offer->base_document == saved && !offer->source_changed);
     std::ifstream source(path);
     assert(project_document(read_project(source)) == saved);
+    // Windows requires the reader to close before replacing the file.
+    source.close();
     project.bodies[4].design.relief = 2.0;
     atomic_write_document(path, project_document(project));
     offer = read_recovery(path);
