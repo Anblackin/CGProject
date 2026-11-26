@@ -977,6 +977,54 @@ static void test_simulation_closeup_mouse_controls() {
     assert(ui.state.simulation_follow_id == "earth");
 }
 
+static void test_simulation_follow_scroll_preserves_direction_at_view_scales() {
+    struct ViewCase { double extent, scale; };
+    for (const ViewCase view : {ViewCase{19.0, 1.0}, ViewCase{1.0, 2.0}, ViewCase{1.0, 8.0}}) {
+        StudioUiTest ui;
+        exit_studio_preset(ui.state);
+        auto project = ui.state.session.project();
+        project.view_extent = view.extent;
+        project.display_scale = view.scale;
+        ui.state.session.replace_project(project);
+        ui.state.session.begin_simulation();
+        ui.state.session.set_playing(false);
+        select_studio_body(ui.state, 6);
+        while (ui.state.camera_transition) advance_studio(ui.state, 0.1);
+        ui.draw(); ui.draw();
+        auto& io = ImGui::GetIO();
+        io.AddMousePosEvent(600, 320);
+        ui.draw();
+        const double initial_zoom = ui.state.render.camera.zoom;
+
+        // Zooming out must move smoothly away, even when the close-up starts above 3.
+        io.AddMouseWheelEvent(0.0f, -1.0f);
+        ui.draw();
+        assert(ui.state.render.camera.zoom > initial_zoom);
+        assert(std::abs(ui.state.render.camera.zoom / initial_zoom - 1.0 / 0.88) < 1e-10);
+        io.AddMouseWheelEvent(0.0f, 1.0f);
+        ui.draw();
+        assert(std::abs(ui.state.render.camera.zoom / initial_zoom - 1.0) < 1e-10);
+
+        // Both ends must saturate without reversing direction or losing the target.
+        io.AddMouseWheelEvent(0.0f, 100.0f);
+        ui.draw();
+        const double closest = ui.state.render.camera.zoom;
+        assert(std::isfinite(closest) && closest > 0.0 && closest < initial_zoom);
+        io.AddMouseWheelEvent(0.0f, 1.0f);
+        ui.draw();
+        assert(ui.state.render.camera.zoom == closest);
+        io.AddMouseWheelEvent(0.0f, -100.0f);
+        ui.draw();
+        const double farthest = ui.state.render.camera.zoom;
+        assert(std::isfinite(farthest) && farthest > initial_zoom);
+        io.AddMouseWheelEvent(0.0f, -1.0f);
+        ui.draw();
+        assert(ui.state.render.camera.zoom == farthest);
+        assert(ui.state.simulation_follow_id == "saturn");
+        assert(!ui.state.session.playing());
+    }
+}
+
 static void test_simulation_follow_exits_when_target_merges() {
     Project project;
     project.bodies = {
@@ -1359,6 +1407,7 @@ int main() {
     test_focus_and_reset_animate_without_losing_playback();
     test_simulation_closeup_tracks_live_state_and_keeps_scene();
     test_simulation_closeup_mouse_controls();
+    test_simulation_follow_scroll_preserves_direction_at_view_scales();
     test_simulation_follow_exits_when_target_merges();
     test_collision_demo_exits_to_saved_camera_before_simulation();
     test_demo_return_keeps_departing_planet_in_view();

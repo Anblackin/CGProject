@@ -1170,6 +1170,7 @@ void draw_scene(StudioState& state, ImTextureID texture, const StudioRenderInput
         if (wheel != 0.0f) {
             double minimum_zoom = state.design_view && state.session.project().solar_system
                 ? 0.4 : 0.08;
+            double maximum_zoom = 3.0;
             if (!state.simulation_follow_id.empty() && state.session.mode() == SessionMode::Simulate) {
                 const auto& project = state.session.project();
                 const auto snapshot = state.session.snapshot();
@@ -1177,11 +1178,14 @@ void draw_scene(StudioState& state, ImTextureID texture, const StudioRenderInput
                     const auto& selected = project.bodies[state.selected];
                     const double extent = project.solar_system ? detail_extent(project, selected)
                         : body->radius * project.display_scale;
-                    minimum_zoom = 0.4 * extent / project.view_extent;
+                    const double follow_scale = extent / project.view_extent;
+                    minimum_zoom = 0.4 * follow_scale;
+                    // Keep the overview range while allowing large close-ups to zoom out smoothly.
+                    maximum_zoom = std::max(maximum_zoom, 3.0 * follow_scale);
                 }
             }
             state.render.camera.zoom = std::clamp(
-                state.render.camera.zoom * std::pow(0.88, wheel), minimum_zoom, 3.0);
+                state.render.camera.zoom * std::pow(0.88, wheel), minimum_zoom, maximum_zoom);
         }
     }
     const bool design_canvas = state.design_view && state.session.project().solar_system &&
