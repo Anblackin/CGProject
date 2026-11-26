@@ -18,6 +18,27 @@ const VisualDetailMap& solar_detail_map(BodyKind kind, SolarShapeLayer layer);
 Vec2 sample_visual_detail(const VisualDetailMap& map, double u, double v);
 
 struct VisualVector { double x, y, z; };
+// Signed light/view cosines identify the reflected and transmitted sides of a thin ring.
+double ring_light_transmission(double opacity,double light_cosine);
+double ring_reflectance(double opacity,double light_cosine,double view_cosine,double sunlight_visibility=1);
+struct CloudReflectance { double alpha=0,brightness=0; };
+// Optical-depth cues for the existing cloud shell, not a volume weather solver.
+double cloud_light_transmission(double mask,double opacity,double light_cosine);
+CloudReflectance cloud_reflectance(double mask,double opacity,double radial_light_cosine,
+                                   double detail_light_cosine,double view_cosine,double light_view_cosine);
+struct RockReflectance { double diffuse=0,specular=0; };
+// Unit surface, light and view vectors; returns bounded artistic lighting factors.
+RockReflectance rock_reflectance(VisualVector normal,VisualVector light,VisualVector view,double roughness);
+// Ocean coverage excludes rock response; ice coverage selects the smoother ice finish.
+RockReflectance rock_surface_reflectance(VisualVector normal,VisualVector light,VisualVector view,
+                                         double land_roughness,double ocean_coverage,double ice_coverage);
+struct BodySurfaceRotation {
+    double spin_cos=1,spin_sin=0,tilt_cos=1,tilt_sin=0;
+    bool uranus=false;
+    VisualVector to_world(VisualVector local) const;
+    VisualVector to_local(VisualVector world) const;
+};
+BodySurfaceRotation body_surface_rotation(BodyKind kind,std::uint32_t seed,double axis_tilt_offset,double time);
 VisualVector perturb_visual_normal(VisualVector normal, VisualVector radial, VisualVector pole,
                                     double longitude_slope, double latitude_slope);
 // Light and plane normal must be unit vectors; point and radius share one scale.

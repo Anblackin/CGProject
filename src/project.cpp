@@ -80,6 +80,7 @@ Project read_project(std::istream& input) {
                 body.design.cloud_motion = design.value("cloud_motion", body.design.cloud_motion);
                 body.design.ring_tilt_offset = design.value("ring_tilt_offset", body.design.ring_tilt_offset);
                 body.design.surface_detail = design.value("surface_detail", body.design.surface_detail);
+                body.design.surface_roughness = design.value("surface_roughness", body.design.surface_roughness);
                 body.design.atmosphere_density = design.value("atmosphere_density", body.design.atmosphere_density);
                 body.design.cloud_altitude = design.value("cloud_altitude", body.design.cloud_altitude);
                 body.design.cloud_shadow = design.value("cloud_shadow", body.design.cloud_shadow);
@@ -147,6 +148,7 @@ void write_project(std::ostream& output, const Project& project) {
                 {"cloud_motion", body.design.cloud_motion},
                 {"ring_tilt_offset", body.design.ring_tilt_offset},
                 {"surface_detail", body.design.surface_detail},
+                {"surface_roughness", body.design.surface_roughness},
                 {"atmosphere_density", body.design.atmosphere_density},
                 {"cloud_altitude", body.design.cloud_altitude},
                 {"cloud_shadow", body.design.cloud_shadow},
@@ -233,6 +235,7 @@ void validate_project(const Project& project) {
                 !std::isfinite(d.ring_tilt_offset) || d.ring_tilt_offset < -30.0 ||
                 d.ring_tilt_offset > 30.0 ||
                 !std::isfinite(d.surface_detail) || d.surface_detail < 0.0 || d.surface_detail > 2.0 ||
+                !std::isfinite(d.surface_roughness) || d.surface_roughness < 0.0 || d.surface_roughness > 1.0 ||
                 !std::isfinite(d.atmosphere_density) || d.atmosphere_density < 0.0 || d.atmosphere_density > 2.0 ||
                 !std::isfinite(d.cloud_altitude) || d.cloud_altitude < 0.005 || d.cloud_altitude > 0.06 ||
                 !std::isfinite(d.cloud_shadow) || d.cloud_shadow < 0.0 || d.cloud_shadow > 1.0 ||

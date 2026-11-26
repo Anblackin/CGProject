@@ -18,7 +18,7 @@ struct Image {
 };
 
 enum class SamplingMode { Single, SSAA4, MSAA4, SSAA16 };
-enum class TraceSurface { Background, Body, Ring, Cloud, Trail, ReferenceTrail, Atmosphere };
+enum class TraceSurface { Background, Body, Ring, Cloud, Trail, ReferenceTrail, Atmosphere, Impact };
 
 struct TraceSample {
     Vec2 position;
@@ -28,7 +28,7 @@ struct TraceSample {
     TraceSurface surface = TraceSurface::Background;
 };
 
-enum class TracePrimitive { Triangle, TrailSegment, Atmosphere };
+enum class TracePrimitive { Triangle, TrailSegment, Atmosphere, Impact };
 enum class TraceDepthTest { NotTested, Passed, Rejected };
 enum class TraceAction { Uncovered, DepthRejected, BackfaceRejected, Transparent, Written, Occluded, InvalidAttributes };
 enum class TraceBlend { Replace, Alpha, CloudBase };
@@ -98,6 +98,7 @@ struct RenderConfig {
     int trace_x = -1;
     int trace_y = -1;
     bool trace_process = true; // Only applies to a selected pixel; disable for timing.
+    bool impact_effects = true;
 };
 
 struct RenderFrame {

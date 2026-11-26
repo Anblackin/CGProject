@@ -46,7 +46,11 @@ inline void check_pixel_process(const planet_sandbox::PixelTrace& trace) {
             }
             if (step.action == TraceAction::Written) {
                 assert(step.covered);
-                if (event.primitive == TracePrimitive::Atmosphere) {
+                if (event.primitive == TracePrimitive::Impact) {
+                    assert(step.depth_test==TraceDepthTest::Passed);
+                    assert(step.after.depth==step.before.depth && step.after.body_index==step.before.body_index);
+                    assert(step.after.surface==step.before.surface);
+                } else if (event.primitive == TracePrimitive::Atmosphere) {
                     assert(step.depth_test == TraceDepthTest::NotTested);
                     assert(step.ray_entry && step.ray_exit && *step.ray_exit > *step.ray_entry);
                     assert(step.after.depth == step.before.depth && step.after.body_index == step.before.body_index);

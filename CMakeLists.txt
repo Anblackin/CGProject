@@ -55,6 +55,7 @@ add_library(planet_core
     src/planet_visual.cpp
     src/sculpt.cpp
     src/simulation.cpp
+    src/impact_visual.cpp
     src/demo_presets.cpp
     src/session.cpp
     src/renderer.cpp
@@ -77,6 +78,14 @@ if(WIN32)
 endif()
 
 enable_testing()
+add_executable(planet_impact_tests tests/impact_tests.cpp)
+target_link_libraries(planet_impact_tests PRIVATE planet_core)
+if(MSVC)
+    target_compile_options(planet_impact_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(planet_impact_tests PRIVATE -UNDEBUG)
+endif()
+add_test(NAME planet_impact_tests COMMAND planet_impact_tests)
 add_executable(planet_core_tests tests/core_tests.cpp)
 target_link_libraries(planet_core_tests PRIVATE planet_core)
 if(MSVC)

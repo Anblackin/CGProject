@@ -44,7 +44,23 @@ struct Simulation::Impl {
                             (catalog_rank(b_id) == catalog_rank(a_id) && b_id < a_id)));
         const std::string survivor = second_wins ? b_id : a_id;
         const std::string absorbed = second_wins ? a_id : b_id;
-        self->events.push_back({simulation->t, survivor, absorbed});
+        const auto& target=second_wins?b:a;
+        const auto& incoming=second_wins?a:b;
+        const double dx=incoming.x-target.x, dy=incoming.y-target.y;
+        const double distance=std::hypot(dx,dy);
+        const double vx=incoming.vx-target.vx, vy=incoming.vy-target.vy;
+        const double speed=std::hypot(vx,vy);
+        const Vec2 normal=distance>1e-12 ? Vec2{dx/distance,dy/distance}
+            : speed>1e-12 ? Vec2{-vx/speed,-vy/speed} : Vec2{1,0};
+        const double total_mass=a.m+b.m;
+        CollisionContact contact;
+        contact.normal=normal;
+        contact.survivor_position={target.x,target.y};
+        contact.position={target.x+normal.x*target.r,target.y+normal.y*target.r};
+        contact.velocity={(a.m*a.vx+b.m*b.vx)/total_mass,(a.m*a.vy+b.m*b.vy)/total_mass};
+        contact.relative_speed=speed;
+        contact.survivor_radius=target.r; contact.absorbed_radius=incoming.r;
+        self->events.push_back({simulation->t, survivor, absorbed, contact});
         const auto outcome = reb_collision_resolve_merge(simulation, collision);
         if (second_wins) {
             const auto found = std::find(self->identity_names.begin(), self->identity_names.end(), survivor);

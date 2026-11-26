@@ -144,6 +144,57 @@ static void test_edges_and_numerics() {
     }
 }
 
+static void test_scalar_material_sampling_preserves_legacy_masks() {
+    Appearance appearance;
+    DesignOverrides design;
+    const Texture mixed{2,2,{255,127,0,67, 20,20,20,245, 14,33,83,91, 127,127,127,0}};
+    Material material{appearance,{1,1,1},{1,1,1},false};
+    material.design=&design;material.cloud_map=&mixed;material.ring_map=&mixed;
+    for(double time:{0.0,1.0,23.0}) for(double drift:{0.0,.5,3.0}) {
+        material.time=time;design.cloud_motion=drift;
+        for(double u:{-.2,0.0,.12,.5,.68,.69,.99,1.0,1.2}) for(double v:{-.1,0.0,.37,1.0,1.1}) {
+            const auto rgba=sample_texture(mixed,u+drift*time*.006,v);
+            assert(cloud_mask(material,u,v)==(rgba[0]+rgba[1]+rgba[2])/3);
+            for(double density:{0.0,.2,1.0}) for(double gap:{0.0,1.0,3.0}) {
+                design.ring_width=density;design.cassini_gap=gap;
+                const double expected=u<0 || u>1?0:sample_texture(mixed,u,.5,false)[3]*
+                    smoothstep(gap*.008,gap*.013+.001,std::abs(u-.68))*density;
+                assert(ring_opacity(material,u)==expected);
+                material.kind=BodyKind::Saturn;material.light={0,1,0};
+                const auto fragment=shade_fragment(material,u,v,{0,1,0},{2,0,0},{0,1,0},true);
+                assert(fragment.alpha==(expected<.03?0:expected));
+            }
+        }
+    }
+}
+
+static void test_saturn_ring_shader_uses_signed_faces_and_optical_depth() {
+    Appearance appearance;
+    DesignOverrides design;
+    const Texture texture{1,1,{255,255,255,220}};
+    Material material{appearance,{1,1,1},{1,1,1},false};
+    material.kind=BodyKind::Saturn;material.design=&design;material.ring_map=&texture;
+    material.ring_normal={0,1,0};material.light={0,1,0};
+    const auto front=shade_fragment(material,.3,.5,{0,1,0},{2,0,0},{0,1,0},true);
+    const auto back=shade_fragment(material,.3,.5,{0,1,0},{2,0,0},{0,-1,0},true);
+    assert(front.alpha==back.alpha && front.alpha==ring_opacity(material,.3));
+    assert(front.color.r>back.color.r);
+
+    // A lit upper hemisphere point sends its shadow ray into the ring at radius 1.6.
+    material.color_map=&texture;material.light={.8,-.6,0};
+    std::array<double,3> surface;
+    for(int i=0;i<3;++i) {
+        design.ring_width=.2*(i+1);
+        surface[i]=surface_color(material,.2,.5,{.8,.6,0},{.8,.6,0},{.8,.6,0}).r;
+    }
+    assert(surface[0]>surface[1] && surface[1]>surface[2]);
+    assert(surface[0]+surface[2]-2*surface[1]>1e-5);
+    design.ring_width=0;
+    const auto clear=surface_color(material,.2,.5,{.8,.6,0},{.8,.6,0},{.8,.6,0});
+    material.ring_map=nullptr;
+    assert(clear.r==surface_color(material,.2,.5,{.8,.6,0},{.8,.6,0},{.8,.6,0}).r);
+}
+
 static void test_cloud_precision_regressions() {
     auto scene=make_aa_benchmark_scene(make_solar_system_project(),AAScene::Earth,320,240);
     struct Probe {
@@ -152,12 +203,13 @@ static void test_cloud_precision_regressions() {
     };
     // Fixed physical fixtures, independently measured with a 20-bit top-left
     // renderer. These bound visible interpolation errors, not all image changes.
+    // RGB references include cloud optical-depth lighting; coverage/alpha fixtures are unchanged.
     const std::array<Probe,6> probes{{
-        {SamplingMode::Single,72,67,12170,0,TraceAction::Written,.273643,{135,137,141}},
-        {SamplingMode::SSAA4,80,56,11786,0,TraceAction::Written,.183595,{124,126,129}},
+        {SamplingMode::Single,72,67,12170,0,TraceAction::Written,.273643,{121,123,126}},
+        {SamplingMode::SSAA4,80,56,11786,0,TraceAction::Written,.183595,{111,113,116}},
         {SamplingMode::SSAA4,59,100,13131,3,TraceAction::BackfaceRejected,0,{21,27,35}},
-        {SamplingMode::SSAA4,66,155,14466,3,TraceAction::Written,.005269,{38,40,44}},
-        {SamplingMode::MSAA4,80,56,11786,0,TraceAction::Written,.183595,{124,126,130}},
+        {SamplingMode::SSAA4,66,155,14466,3,TraceAction::Written,.005269,{33,36,40}},
+        {SamplingMode::MSAA4,80,56,11786,0,TraceAction::Written,.183595,{112,114,117}},
         {SamplingMode::MSAA4,59,100,13131,3,TraceAction::BackfaceRejected,0,{20,26,33}}
     }};
     for(const auto& probe:probes) {
@@ -382,6 +434,8 @@ static void test_interpolation_and_large_render() {
 }
 
 int main() {
+    test_scalar_material_sampling_preserves_legacy_masks();
+    test_saturn_ring_shader_uses_signed_faces_and_optical_depth();
     test_rectangles();test_edges_and_numerics();test_random_masks();
     test_renderer_meshes();test_clipped_mesh();
     test_interpolation_and_large_render();

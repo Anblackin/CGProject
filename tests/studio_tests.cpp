@@ -85,6 +85,68 @@ static void test_collision_replay_pauses_selects_survivor_and_keeps_design() {
     assert(!replay_studio_collision(state, event));
 }
 
+static void test_collision_replay_runs_continuously_and_preserves_normal_speed() {
+    Project project;
+    project.bodies={{"a","A",2,.1,{0,0},{0,0},{}},
+                    {"b","B",1,.1,{1,0},{-1,0},{}}};
+    StudioState state(project,"continuous-impact.json");
+    state.session.begin_simulation();
+    state.session.set_speed(7);
+    seek_studio_time(state,1);
+    assert(state.session.observed_events().size()==1);
+    const auto event=state.session.observed_events().front();
+    const auto saved=project_document(state.session.project());
+    assert(replay_studio_collision(state,event));
+    assert(state.collision_replay && state.session.snapshot().time<event.time);
+    while(state.camera_transition) advance_studio(state,.1);
+    const double before=state.session.snapshot().time;
+    advance_studio(state,.1);
+    assert(std::abs(state.session.snapshot().time-before-.025)<1e-10);
+    state.collision_replay->playing=false;
+    const double paused=state.session.snapshot().time;
+    advance_studio(state,.1);
+    assert(state.session.snapshot().time==paused);
+    state.collision_replay->playing=true;
+    state.compare_modes=true;
+    advance_studio(state,.1);
+    assert(state.session.snapshot().time==paused);
+    state.compare_modes=false;
+    bool crossed=false;
+    for(int i=0;i<120 && state.collision_replay && state.collision_replay->playing;++i) {
+        advance_studio(state,.1);
+        crossed|=state.session.snapshot().time>event.time;
+    }
+    assert(crossed && state.collision_replay && !state.collision_replay->playing);
+    assert(!state.session.playing() && state.session.speed()==7);
+    assert(project_document(state.session.project())==saved);
+    assert(replay_studio_collision(state,event));
+    while(state.camera_transition) advance_studio(state,.1);
+    seek_studio_time(state,0);
+    assert(!state.collision_replay);
+
+    auto solar=make_solar_system_project();
+    solar.bodies[3].position=solar.bodies[4].position;
+    StudioState solar_state(solar,"replay-overview.json");
+    solar_state.session.begin_simulation();
+    const auto solar_event=solar_state.session.observed_events().front();
+    assert(replay_studio_collision(solar_state,solar_event));
+    while(solar_state.camera_transition) advance_studio(solar_state,.1);
+    select_studio_overview(solar_state,StudioOverview::FullSystem);
+    assert(!solar_state.collision_replay && solar_state.camera_transition);
+    while(solar_state.camera_transition) advance_studio(solar_state,.1);
+    assert(solar_state.render.camera.zoom==.55);
+
+    Project large;
+    large.view_extent=2;large.display_scale=1;
+    large.bodies={{"a","A",2,.1,{0,0},{0,0},{}},
+                  {"b","B",1,1,{.9,0},{0,0},{}}};
+    StudioState large_state(large,"large-impact-replay.json");
+    large_state.session.begin_simulation();
+    const auto large_event=large_state.session.observed_events().front();
+    assert(replay_studio_collision(large_state,large_event));
+    assert(large_state.camera_transition->to.zoom>.8);
+}
+
 // Exercise the same render/UI order as the desktop with actual mouse events.
 struct StudioUiTest {
     StudioState state{make_solar_system_project(), "ui-regression.json"};
@@ -303,11 +365,45 @@ static void test_collision_bookmark_click_after_rewind() {
     assert(list);
     ui.click(list->WorkRect.Min.x + 45, list->WorkRect.Min.y + 14);
     assert(!ui.state.session.playing());
-    assert(ui.state.session.snapshot().time >= event.time);
+    assert(ui.state.collision_replay && ui.state.session.snapshot().time < event.time);
+    while(ui.state.camera_transition) ui.draw();
+    seek_studio_time(ui.state,event.time+.05);
     assert(ui.state.session.project().bodies[ui.state.selected].id == "earth");
     assert(ui.state.session.observed_events().size() == 1);
     select_studio_scene_body(ui.state, 4);
     assert(ui.text().find("Merged into Earth") != std::string::npos);
+}
+
+static void test_replay_pause_and_reset_buttons_use_the_replay_clock() {
+    StudioUiTest ui;
+    exit_studio_preset(ui.state);
+    Project project;
+    project.bodies={{"a","A",2,.1,{0,0},{0,0},{}},
+                    {"b","B",1,.1,{1,0},{-1,0},{}}};
+    ui.state.session.replace_project(project);
+    ui.state.session.begin_simulation();
+    ui.state.session.set_speed(5);
+    seek_studio_time(ui.state,1);
+    const auto event=ui.state.session.observed_events().front();
+    assert(replay_studio_collision(ui.state,event));
+    while(ui.state.camera_transition) ui.draw();
+    ui.draw();
+    const float padding=ImGui::GetStyle().FramePadding.x*2;
+    const float spacing=ImGui::GetStyle().ItemSpacing.x;
+    const float play_x=210+ImGui::CalcTextSize("Design").x+padding+spacing;
+    const float y=ImGui::GetStyle().WindowPadding.y+ImGui::GetFrameHeight()/2;
+    ui.click(play_x+12,y);
+    assert(ui.state.collision_replay && !ui.state.collision_replay->playing);
+    const double paused=ui.state.session.snapshot().time;
+    ui.draw();ui.draw();
+    assert(ui.state.session.snapshot().time==paused);
+    ui.click(play_x+12,y);
+    assert(ui.state.collision_replay->playing && ui.state.session.speed()==5);
+    const float reset_x=play_x+ImGui::CalcTextSize("Pause").x+padding+spacing+
+        ImGui::CalcTextSize("Step").x+padding+spacing;
+    ui.click(reset_x+12,y);
+    assert(!ui.state.collision_replay && !ui.state.session.playing());
+    assert(ui.state.session.snapshot().time==0 && ui.state.session.speed()==5);
 }
 
 static void test_collision_demo_inspector_uses_its_temporary_initial_conditions() {
@@ -873,6 +969,235 @@ static void test_focus_and_reset_animate_without_losing_playback() {
     assert(std::abs(state.render.camera.zoom - 0.55) < 1e-12);
 }
 
+static void test_roughness_edits_survive_undo_and_redo() {
+    StudioState state(make_solar_system_project(),"roughness-history.json");
+    state.selected=1;
+    auto project=state.session.project();project.bodies[1].design.surface_roughness=.12;
+    assert(apply_studio_edit(state,project,"Surface roughness","mercury"));
+    state.history.finish();
+    assert(state.session.project().bodies[1].design.surface_roughness==.12);
+    assert(undo_studio_edit(state));
+    assert(state.session.project().bodies[1].design.surface_roughness==.7);
+    assert(redo_studio_edit(state));
+    assert(state.session.project().bodies[1].design.surface_roughness==.12);
+}
+
+static void test_solar_size_guard_preserves_physics_and_restores_exaggeration() {
+    auto project = make_solar_system_project();
+    project.display_scale = 8.0;
+    StudioState state(project, "size-guard.json");
+    const auto saved = project_document(state.session.project());
+    const auto snapshot = state.session.snapshot();
+    auto input = make_studio_render_input(state);
+    assert(input.project.display_scale == 1.0);
+    assert(project_document(state.session.project()) == saved);
+    assert(input.snapshot.bodies.size() == snapshot.bodies.size());
+    for (std::size_t i = 0; i < snapshot.bodies.size(); ++i) {
+        assert(input.snapshot.bodies[i].radius == snapshot.bodies[i].radius);
+        assert(input.snapshot.bodies[i].position.x == snapshot.bodies[i].position.x);
+        assert(input.snapshot.bodies[i].position.y == snapshot.bodies[i].position.y);
+    }
+    state.protect_display_sizes = false;
+    assert(make_studio_render_input(state).project.display_scale == 8.0);
+    state.protect_display_sizes = true;
+    begin_studio_design_focus(state, 3);
+    const auto arrival = state.camera_transition->to;
+    while (state.camera_transition) advance_studio(state, .1);
+    input = make_studio_render_input(state);
+    assert(input.project.display_scale == 1.0);
+    assert(std::abs(arrival.zoom * project.view_extent -
+                    input.config.camera.zoom * input.project.view_extent) < 1e-12);
+    begin_studio_simulation(state);
+    while (state.camera_transition) advance_studio(state, .1);
+    state.session.set_playing(false);
+    select_studio_body(state, 6);
+    while (state.camera_transition) advance_studio(state, .1);
+    input = make_studio_render_input(state);
+    assert(input.project.display_scale == 1.0);
+    assert(input.config.camera.zoom < .08);
+    assert(project_document(state.session.project()) == saved);
+
+    StudioState baseline(make_solar_system_project(), "guard-baseline.json");
+    assert(project_document(make_studio_render_input(baseline).project) ==
+           project_document(baseline.session.project()));
+    project.display_scale = .5;
+    StudioState small(project, "guard-small.json");
+    assert(make_studio_render_input(small).project.display_scale == .5);
+    project.solar_system = false;
+    StudioState custom(project, "guard-custom.json");
+    project.display_scale = 8;
+    custom.session.replace_project(project);
+    assert(make_studio_render_input(custom).project.display_scale == 8);
+    activate_studio_preset(baseline, DemoPreset::SaturnRing);
+    assert(make_studio_render_input(baseline).project.display_scale ==
+           baseline.demos.project(baseline.session.project()).display_scale);
+}
+
+static void test_inner_overview_frames_live_inner_planets_without_changing_scene() {
+    StudioState state(make_solar_system_project(), "inner-overview.json");
+    state.render.width = 320; state.render.height = 240;
+    const auto original = project_document(state.session.project());
+    const auto full_input = make_studio_render_input(state);
+    const auto full = render_studio_frame(state, full_input);
+    const auto full_markers = studio_body_markers(full, 9);
+    state.overview = StudioOverview::InnerSystem;
+    reset_studio_view(state);
+    assert(state.camera_transition);
+    while (state.camera_transition) advance_studio(state, .1);
+    auto input = make_studio_render_input(state);
+    assert(input.config.camera.zoom < .3);
+    assert(input.snapshot.bodies.size() == 9);
+    assert(project_document(state.session.project()) == original);
+    const auto frame = render_studio_frame(state, input);
+    const auto markers = studio_body_markers(frame, 9);
+    for (int selected : {1,2,3,4}) {
+        const auto find = [selected](const auto& candidates) {
+            return std::find_if(candidates.begin(), candidates.end(),
+                [selected](const auto& marker) { return marker.body_index == selected; });
+        };
+        const auto inner_marker = find(markers), full_marker = find(full_markers);
+        assert(inner_marker != markers.end() && full_marker != full_markers.end());
+        assert(inner_marker->max_y - inner_marker->min_y >
+               1.8 * (full_marker->max_y - full_marker->min_y));
+    }
+    begin_studio_design_focus(state,3);
+    while (state.camera_transition) advance_studio(state,.1);
+    return_studio_overview(state);
+    while (state.camera_transition) advance_studio(state,.1);
+    assert(std::abs(state.render.camera.zoom-input.config.camera.zoom)<1e-12);
+    begin_studio_simulation(state);
+    while(state.camera_transition) advance_studio(state,.1);
+    assert(state.session.playing());
+    advance_studio(state,.1);
+    input = make_studio_render_input(state);
+    const auto sun = std::find_if(input.snapshot.bodies.begin(),input.snapshot.bodies.end(),
+        [](const auto& body){return body.id=="sun";});
+    assert(input.config.camera.target.x == sun->position.x);
+    assert(input.config.camera.target.y == sun->position.y);
+    select_studio_body(state,3);
+    while(state.camera_transition) advance_studio(state,.1);
+    return_studio_overview(state);
+    while(state.camera_transition) advance_studio(state,.1);
+    assert(state.simulation_follow_id.empty() && state.session.playing());
+    assert(state.render.camera.zoom < .3);
+    state.overview=StudioOverview::FullSystem;
+    reset_studio_view(state);
+    const auto frozen_time=state.session.snapshot().time;
+    advance_studio(state,.1);
+    assert(!state.session.playing() && state.session.snapshot().time==frozen_time);
+    while(state.camera_transition) advance_studio(state,.1);
+    assert(state.session.playing() && state.render.camera.zoom==.55);
+    assert(project_document(state.session.project())==original);
+}
+
+static void test_inner_overview_returns_to_initial_sun_without_camera_jump() {
+    auto project=make_solar_system_project();
+    for(auto& body:project.bodies) body.velocity.x+=1;
+    StudioState state(project,"drifting-sun.json");
+    state.overview=StudioOverview::InnerSystem;
+    begin_studio_simulation(state);
+    while(state.camera_transition) advance_studio(state,.1);
+    seek_studio_time(state,10);
+    assert(make_studio_render_input(state).config.camera.target.x>9);
+    return_studio_design(state);
+    assert(state.camera_transition->to.target.x==0);
+    while(state.camera_transition) advance_studio(state,.1);
+    const auto input=make_studio_render_input(state);
+    assert(state.session.mode()==SessionMode::Design);
+    assert(input.config.camera.target.x==state.render.camera.target.x);
+    assert(input.config.camera.target.y==state.render.camera.target.y);
+    begin_studio_design_focus(state,3);
+    assert(state.camera_transition->from.target.x==input.config.camera.target.x);
+}
+
+static void test_size_guard_keeps_demo_departure_framing() {
+    for(const auto preset:{DemoPreset::EarthTerrain,DemoPreset::SaturnRing}) {
+        for(int destination=0;destination<3;++destination) {
+            auto project=make_solar_system_project();
+            project.display_scale=8;
+            StudioState state(project,"guard-demo.json");
+            state.render.width=128; state.render.height=96;
+            activate_studio_preset(state,preset);
+            const int selected=state.selected;
+            const auto before=make_studio_render_input(state);
+            const auto before_frame=render_studio_frame(state,before);
+            if(destination==0) begin_studio_design_focus(state,selected);
+            else if(destination==1) return_studio_overview(state);
+            else begin_studio_simulation(state);
+            const auto after=make_studio_render_input(state);
+            const auto after_frame=render_studio_frame(state,after);
+            assert(after.project.display_scale==1);
+            const double relative_before=before.project.display_scale/
+                (before.project.view_extent*before.config.camera.zoom);
+            const double relative_after=after.project.display_scale/
+                (after.project.view_extent*after.config.camera.zoom);
+            assert(std::abs(relative_after/relative_before-1)<1e-10);
+            const auto height=[selected](const RenderFrame& frame) {
+                const auto markers=studio_body_markers(frame,9);
+                const auto marker=std::find_if(markers.begin(),markers.end(),
+                    [selected](const auto& item){return item.body_index==selected;});
+                assert(marker!=markers.end());
+                return marker->max_y-marker->min_y+1;
+            };
+            assert(std::abs(height(before_frame)-height(after_frame))<=2);
+        }
+    }
+}
+
+static void test_overview_controls_and_size_guard_invalidate_old_frames() {
+    StudioUiTest ui;
+    exit_studio_preset(ui.state);
+    auto project=ui.state.session.project();
+    project.display_scale=8;
+    ui.state.session.replace_project(project);
+    ui.draw(); ui.draw();
+    ImGuiWindow* scene=nullptr;
+    for(auto* window:GImGui->Windows)
+        if(std::strstr(window->Name,"/##scene_")) scene=window;
+    assert(scene);
+    const float button_height=ImGui::GetFrameHeight();
+    const float spacing=ImGui::GetStyle().ItemSpacing.x;
+    const float full_width=ImGui::CalcTextSize("Full system").x+2*ImGui::GetStyle().FramePadding.x;
+    const float inner_width=ImGui::CalcTextSize("Inner system").x+2*ImGui::GetStyle().FramePadding.x;
+    const float y=scene->WorkRect.Min.y+2*ImGui::GetFrameHeightWithSpacing()+button_height/2;
+    const float x=scene->WorkRect.Min.x;
+    ui.click(x+full_width+spacing+inner_width/2,y);
+    assert(ui.state.overview==StudioOverview::InnerSystem && ui.state.camera_transition);
+    while(ui.state.camera_transition) ui.draw();
+    assert(ui.state.render.camera.zoom<.3);
+    ui.draw();
+    StudioRenderPipeline pipeline;
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
+    do {
+        pipeline.update(ui.state,make_studio_render_input(ui.state),ui.now);
+        assert(std::chrono::steady_clock::now()<deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while(!studio_frame_can_interact(ui.state));
+    assert(studio_frame_can_interact(ui.state));
+    set_studio_size_protection(ui.state,false);
+    assert(!studio_frame_can_interact(ui.state));
+    ui.draw();
+    assert(make_studio_render_input(ui.state).project.display_scale==8);
+    ui.click(x+full_width+spacing+inner_width+spacing+button_height/2,y);
+    assert(ui.state.protect_display_sizes);
+    assert(make_studio_render_input(ui.state).project.display_scale==1);
+    ui.click(x+full_width/2,y);
+    assert(ui.state.overview==StudioOverview::FullSystem && ui.state.camera_transition);
+    while(ui.state.camera_transition) ui.draw();
+    assert(ui.state.render.camera.zoom==.55);
+    assert(ui.text().find("Illustrative sizes")!=std::string::npos);
+
+    ui.state.session.begin_simulation();
+    ui.state.session.set_playing(false);
+    select_studio_body(ui.state,3);
+    while(ui.state.camera_transition) advance_studio(ui.state,.1);
+    const auto protected_input=make_studio_render_input(ui.state);
+    set_studio_size_protection(ui.state,false);
+    const auto original_input=make_studio_render_input(ui.state);
+    assert(std::abs(original_input.config.camera.zoom/protected_input.config.camera.zoom-8)<1e-10);
+    assert(!ui.state.session.playing() && ui.state.simulation_follow_id=="earth");
+}
+
 static void test_simulation_closeup_tracks_live_state_and_keeps_scene() {
     StudioState state(make_solar_system_project(), "simulation-follow.json");
     const auto original = project_document(state.session.project());
@@ -986,6 +1311,7 @@ static void test_simulation_follow_scroll_preserves_direction_at_view_scales() {
         project.view_extent = view.extent;
         project.display_scale = view.scale;
         ui.state.session.replace_project(project);
+        ui.state.protect_display_sizes = false; // Exercise the original unrestricted size range.
         ui.state.session.begin_simulation();
         ui.state.session.set_playing(false);
         select_studio_body(ui.state, 6);
@@ -1384,7 +1710,9 @@ int main() {
     test_collision_demo_inspector_uses_its_temporary_initial_conditions();
     test_orbit_tab_does_not_paint_the_closeup();
     test_collision_bookmark_click_after_rewind();
+    test_replay_pause_and_reset_buttons_use_the_replay_clock();
     test_collision_replay_pauses_selects_survivor_and_keeps_design();
+    test_collision_replay_runs_continuously_and_preserves_normal_speed();
     test_inspector_switches_from_pixel_to_simulation_and_back();
     test_analysis_hides_scene_annotations_and_guides_the_tool();
     test_reselecting_closeup_keeps_pixel_analysis();
@@ -1406,6 +1734,12 @@ int main() {
     test_simulation_waits_for_return_flight();
     test_focus_and_reset_animate_without_losing_playback();
     test_simulation_closeup_tracks_live_state_and_keeps_scene();
+    test_solar_size_guard_preserves_physics_and_restores_exaggeration();
+    test_roughness_edits_survive_undo_and_redo();
+    test_inner_overview_frames_live_inner_planets_without_changing_scene();
+    test_inner_overview_returns_to_initial_sun_without_camera_jump();
+    test_size_guard_keeps_demo_departure_framing();
+    test_overview_controls_and_size_guard_invalidate_old_frames();
     test_simulation_closeup_mouse_controls();
     test_simulation_follow_scroll_preserves_direction_at_view_scales();
     test_simulation_follow_exits_when_target_merges();

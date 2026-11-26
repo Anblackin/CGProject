@@ -3,6 +3,7 @@
 #include "planet_sandbox/project.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,10 +17,18 @@ struct BodyState {
     double radius = 0.0;
 };
 
+struct CollisionContact {
+    Vec2 position, normal, velocity, survivor_position;
+    double relative_speed = 0.0;
+    double survivor_radius = 0.0;
+    double absorbed_radius = 0.0;
+};
+
 struct CollisionEvent {
     double time = 0.0;
     std::string survivor;
     std::string absorbed;
+    std::optional<CollisionContact> contact;
 };
 
 struct BodyTrail {

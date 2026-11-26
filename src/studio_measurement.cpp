@@ -24,12 +24,22 @@ std::string measurement_key(const StudioState& state, const StudioRenderInput& i
     add(input.project.view_extent); add(input.project.display_scale);
     const auto& config = input.config;
     add(config.width); add(config.height);
+    add(config.impact_effects);
     add(config.camera.yaw); add(config.camera.pitch); add(config.camera.zoom);
     point(config.camera.target);
     add(state.compare_modes ? state.compare_left : config.sampling);
     add(state.compare_modes ? state.compare_right : config.sampling);
     const auto& snapshot = input.snapshot;
     add(snapshot.time); add(snapshot.bodies.size());
+    add(snapshot.events.size());
+    for(const auto& event:snapshot.events) {
+        add(event.time);text(event.survivor);text(event.absorbed);add(event.contact.has_value());
+        if(event.contact) {
+            const auto& c=*event.contact;
+            point(c.position);point(c.normal);point(c.velocity);point(c.survivor_position);
+            add(c.relative_speed);add(c.survivor_radius);add(c.absorbed_radius);
+        }
+    }
     for (const auto& body : snapshot.bodies) {
         text(body.id); point(body.position); point(body.velocity);
         add(body.mass); add(body.radius);
@@ -50,7 +60,7 @@ std::string measurement_key(const StudioState& state, const StudioRenderInput& i
 void prepare_measurement(StudioState& state, const std::string& key, double now_seconds) {
     auto& result = state.measurement;
     const bool playing = state.demos.active() == DemoPreset::Collision
-        ? state.demos.playing() : state.session.playing();
+        ? state.demos.playing() : state.collision_replay ? state.collision_replay->playing : state.session.playing();
     const bool eligible = !playing && !state.camera_transition &&
         (state.compare_modes || state.inspect_pixel || state.pixel_tab_active);
     if (!eligible) {
@@ -104,6 +114,7 @@ std::string context_key(const StudioState& state, const StudioRenderInput& input
     add(state.compare_modes || state.inspect_pixel || state.pixel_tab_active);
     add(state.render.sampling); add(state.compare_left); add(state.compare_right);
     add(input.config.width); add(input.config.height);
+    add(input.config.impact_effects);
     add(input.project.view_extent); add(input.project.display_scale); add(input.project.solar_system);
     add(state.show_reference_orbit);
     for (const auto& body : input.project.bodies) {
@@ -180,7 +191,7 @@ const RenderFrame& StudioRenderPipeline::update(StudioState& state,
     }
     pipeline.motion_key = full_key;
     const bool playing = state.demos.active() == DemoPreset::Collision
-        ? state.demos.playing() : state.session.playing();
+        ? state.demos.playing() : state.collision_replay ? state.collision_replay->playing : state.session.playing();
     const bool analysis = state.compare_modes || state.inspect_pixel || state.pixel_tab_active;
     if (playing || state.camera_transition || state.preview_interacting) {
         pipeline.changed_at = now_seconds;

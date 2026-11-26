@@ -55,6 +55,7 @@ struct DesignOverrides {
     double storm_longitude = 0.37;
     double storm_latitude = 0.61;
     double storm_aspect = 1.0;
+    double surface_roughness = .7;
 };
 
 struct BodySpec {

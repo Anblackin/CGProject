@@ -23,10 +23,18 @@ const BodyState* simulation_follow_body(const StudioState& state, const SceneSna
     return found == snapshot.bodies.end() ? nullptr : &*found;
 }
 
-double detail_extent(const Project& project, const BodySpec& body) {
+double display_scale(const StudioState& state) {
+    const auto& project = state.session.project();
+    return project.solar_system && state.protect_display_sizes && state.demos.active() == DemoPreset::None
+        ? std::min(project.display_scale, 1.0) : project.display_scale;
+}
+
+double detail_extent(const StudioState& state, const BodySpec& body, bool normal_scene = false) {
     const double framing = body.kind == BodyKind::Saturn ? 2.0 :
                            body.kind == BodyKind::Uranus ? 1.4 : 0.95;
-    return body.display_radius * project.display_scale * framing;
+    const double scale = normal_scene && state.protect_display_sizes
+        ? std::min(state.session.project().display_scale, 1.0) : display_scale(state);
+    return body.display_radius * scale * framing;
 }
 
 RenderCamera world_camera(const StudioState& state) {
@@ -39,19 +47,53 @@ RenderCamera world_camera(const StudioState& state) {
         const Project& project = state.session.project();
         const BodySpec& body = project.bodies[state.selected];
         camera.target = body.position;
-        camera.zoom *= detail_extent(project, body) / project.view_extent;
+        // Flights leave isolated demos into the normal scene's effective scale.
+        camera.zoom *= detail_extent(state, body, true) / project.view_extent;
     }
     return camera;
 }
 
-RenderCamera overview_camera(const StudioState& state) {
+bool inner_overview(const StudioState& state) {
+    return state.session.project().solar_system && state.demos.active() == DemoPreset::None &&
+           state.overview == StudioOverview::InnerSystem;
+}
+
+RenderCamera overview_camera(const StudioState& state, bool initial_positions = false) {
     RenderCamera camera;
     camera.zoom = state.session.project().solar_system ? 0.55 : 1.0;
+    if (inner_overview(state)) {
+        SceneSnapshot snapshot;
+        if (initial_positions) {
+            for (const auto& body : state.session.project().bodies)
+                snapshot.bodies.push_back({body.id, body.position, body.velocity, body.mass, body.radius});
+        } else {
+            snapshot = state.session.snapshot();
+        }
+        const auto sun = std::find_if(snapshot.bodies.begin(), snapshot.bodies.end(),
+            [](const BodyState& body) { return body.id == "sun"; });
+        if (sun != snapshot.bodies.end()) camera.target = sun->position;
+        double extent = 6.0;
+        for (const auto& body : snapshot.bodies) {
+            const auto spec = std::find_if(state.session.project().bodies.begin(),
+                state.session.project().bodies.end(), [&](const BodySpec& candidate) { return candidate.id == body.id; });
+            if (spec == state.session.project().bodies.end() ||
+                spec->kind < BodyKind::Mercury || spec->kind > BodyKind::Mars) continue;
+            extent = std::max(extent, std::hypot(body.position.x - camera.target.x,
+                body.position.y - camera.target.y) + 1.5 * spec->display_radius * display_scale(state));
+        }
+        const double aspect = std::min(1.0, double(state.render.width) / std::max(1, state.render.height));
+        camera.zoom = extent * 1.12 / (1.35 * state.session.project().view_extent * std::max(.1, aspect));
+    }
     return camera;
 }
 
 void update_simulation_follow(StudioState& state) {
-    if (state.simulation_follow_id.empty()) return;
+    if(state.collision_replay) return;
+    if (state.simulation_follow_id.empty()) {
+        if (inner_overview(state) && !state.design_view && state.session.mode() == SessionMode::Simulate)
+            state.render.camera.target = overview_camera(state).target;
+        return;
+    }
     if (state.session.mode() != SessionMode::Simulate) {
         state.simulation_follow_id.clear();
         return;
@@ -177,6 +219,7 @@ const char* trace_surface_name(TraceSurface surface) {
     case TraceSurface::Ring: return "Ring";
     case TraceSurface::Cloud: return "Cloud";
     case TraceSurface::Atmosphere: return "Atmosphere";
+    case TraceSurface::Impact: return "Impact glow";
     case TraceSurface::Trail: return "Trail";
     case TraceSurface::ReferenceTrail: return "Reference orbit";
     }
@@ -526,6 +569,12 @@ void edit_solar_design(StudioState& state) {
     if (kind != BodyKind::Sun && ImGui::CollapsingHeader("Light and atmosphere")) {
         slider("Fine surface detail", current.surface_detail, 0.0f, 2.0f,
                [](DesignOverrides& d, float v) { d.surface_detail = v; });
+        if(kind==BodyKind::Mercury || kind==BodyKind::Venus || kind==BodyKind::Earth || kind==BodyKind::Mars) {
+            slider(kind==BodyKind::Venus?"Radar surface roughness":"Surface roughness",
+                current.surface_roughness,0.0f,1.0f,[](DesignOverrides& d,float v){d.surface_roughness=v;});
+            ImGui::TextWrapped(kind==BodyKind::Venus?"Surface finish is visible when clouds are transparent.":
+                "Lower values give smoother highlights; higher values give a dry, matte surface.");
+        }
         if (kind != BodyKind::Mercury) {
             slider("Atmosphere density", current.atmosphere_density, 0.0f, 2.0f,
                    [](DesignOverrides& d, float v) { d.atmosphere_density = v; });
@@ -767,6 +816,12 @@ void draw_initial_motion(const BodySpec& body) {
 }
 
 void draw_simulation_inspector(StudioState& state) {
+    ImGui::Checkbox("Impact effects", &state.render.impact_effects);
+    ImGui::SetItemTooltip("Artistic flash, ejecta and afterglow. These visuals do not simulate fragmentation.");
+    if(state.collision_replay) {
+        ImGui::TextColored({.95f,.65f,.32f,1},"Collision replay / 0.25x");
+        if(ImGui::Button("Stop replay")) cancel_studio_collision_replay(state);
+    }
     const auto snapshot = state.demos.snapshot(state.session.snapshot());
     const auto& project = state.session.project();
     const auto& selected = project.bodies[state.selected];
@@ -821,8 +876,8 @@ void draw_simulation_inspector(StudioState& state) {
         ImGui::TextWrapped("No collisions yet. Change an initial orbit in Design or try the collision demo.");
         return;
     }
-    ImGui::TextWrapped(collision_demo ? "Reset the demo to watch it again." :
-                                      "Select an event to pause and replay its result.");
+    ImGui::TextWrapped(collision_demo ? "Reset the demo to watch it again, including its fading aftermath." :
+                                      "Select an event to watch its approach, impact and aftermath at 0.25x.");
     std::optional<CollisionEvent> replay;
     ImGui::BeginChild("##collision-list", {0, std::max(85.0f, ImGui::GetContentRegionAvail().y)},
                        ImGuiChildFlags_Borders);
@@ -837,7 +892,7 @@ void draw_simulation_inspector(StudioState& state) {
                               {0, ImGui::GetTextLineHeight() * 2 + 8}) && !collision_demo) replay = *it;
         ImGui::SetItemTooltip("%s absorbed %s.%s", body_name(project, it->survivor).c_str(),
                               body_name(project, it->absorbed).c_str(),
-                              collision_demo ? "" : " Click to view the result.");
+                              collision_demo ? "" : " Click for slow replay.");
         ImGui::PopID();
     }
     ImGui::EndChild();
@@ -1077,6 +1132,7 @@ void draw_scene(StudioState& state, ImTextureID texture, const StudioRenderInput
             state.selected_pixel_x = std::max(1, state.render.width / 2) / 2;
             state.selected_pixel_y = state.render.height / 2;
             if (state.session.mode() == SessionMode::Simulate) state.session.set_playing(false);
+            if(state.collision_replay) state.collision_replay->playing=false;
             if (state.demos.active() == DemoPreset::Collision) state.demos.set_playing(false);
         }
     }
@@ -1117,6 +1173,24 @@ void draw_scene(StudioState& state, ImTextureID texture, const StudioRenderInput
                                ImGuiSliderFlags_AlwaysClamp)) {
             seek_studio_time(state, time);
         }
+    }
+    if (state.session.project().solar_system && state.demos.active() == DemoPreset::None) {
+        const auto scope_button = [&](const char* label, StudioOverview overview) {
+            const bool active = !state.design_view && !state.collision_replay &&
+                state.simulation_follow_id.empty() && state.overview == overview;
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, {0.12f, 0.38f, 0.39f, 1.0f});
+            if (ImGui::Button(label)) select_studio_overview(state, overview);
+            if (active) ImGui::PopStyleColor();
+        };
+        scope_button("Full system", StudioOverview::FullSystem);
+        ImGui::SameLine();
+        scope_button("Inner system", StudioOverview::InnerSystem);
+        ImGui::SameLine();
+        bool protect = state.protect_display_sizes;
+        if (ImGui::Checkbox("Protect sizes", &protect)) set_studio_size_protection(state, protect);
+        ImGui::SetItemTooltip("Limit display scale to the baseline size so enlarged bodies do not hide the inner planets.\n"
+                              "Switch off to restore your exaggerated sizes. Physics and saved parameters are unchanged.");
+        ImGui::TextDisabled("Illustrative sizes / %s", state.protect_display_sizes ? "size protection on" : "original scale");
     }
     ImGui::EndDisabled();
     ImGui::Separator();
@@ -1171,12 +1245,17 @@ void draw_scene(StudioState& state, ImTextureID texture, const StudioRenderInput
             double minimum_zoom = state.design_view && state.session.project().solar_system
                 ? 0.4 : 0.08;
             double maximum_zoom = 3.0;
+            if (inner_overview(state) && !state.design_view && state.simulation_follow_id.empty()) {
+                const double zoom = overview_camera(state).zoom;
+                minimum_zoom = std::min(minimum_zoom, .1 * zoom);
+                maximum_zoom = std::max(maximum_zoom, 3.0 * zoom);
+            }
             if (!state.simulation_follow_id.empty() && state.session.mode() == SessionMode::Simulate) {
                 const auto& project = state.session.project();
                 const auto snapshot = state.session.snapshot();
                 if (const auto* body = simulation_follow_body(state, snapshot)) {
                     const auto& selected = project.bodies[state.selected];
-                    const double extent = project.solar_system ? detail_extent(project, selected)
+                    const double extent = project.solar_system ? detail_extent(state, selected)
                         : body->radius * project.display_scale;
                     const double follow_scale = extent / project.view_extent;
                     minimum_zoom = 0.4 * follow_scale;
@@ -1328,7 +1407,7 @@ void begin_studio_design_focus(StudioState& state, int body_index) {
     detail.zoom = design_zoom;
     RenderCamera to = detail;
     to.target = body.position;
-    to.zoom *= detail_extent(project, body) / project.view_extent;
+    to.zoom *= detail_extent(state, body) / project.view_extent;
     start_camera_transition(state, from, to, StudioCameraDestination::Design,
                             detail, false, body.position);
     if (transferring) {
@@ -1342,6 +1421,7 @@ void begin_studio_design_focus(StudioState& state, int body_index) {
 }
 
 void select_studio_body(StudioState& state, int body_index) {
+    cancel_studio_collision_replay(state);
     if (state.session.mode() == SessionMode::Design && state.session.project().solar_system &&
         state.demos.active() != DemoPreset::Collision) {
         // Reselecting the open closeup must not restart its camera flight or
@@ -1369,6 +1449,7 @@ void select_studio_scene_body(StudioState& state, int body_index) {
 }
 
 void return_studio_overview(StudioState& state) {
+    cancel_studio_collision_replay(state);
     if (state.session.mode() == SessionMode::Simulate) {
         reset_studio_view(state);
         return;
@@ -1389,6 +1470,29 @@ void return_studio_overview(StudioState& state) {
     state.compare_baseline = false;
     start_camera_transition(state, from, overview_camera(state),
                             StudioCameraDestination::Overview, {}, false, anchor);
+}
+
+void select_studio_overview(StudioState& state, StudioOverview overview) {
+    if (!state.session.project().solar_system || state.demos.active() != DemoPreset::None || state.camera_transition) return;
+    const bool already_open = state.overview == overview && !state.design_view &&
+        !state.collision_replay && state.simulation_follow_id.empty();
+    if (already_open) return;
+    const auto from = world_camera(state);
+    state.overview = overview;
+    ++state.scene_generation;
+    return_studio_overview(state);
+    state.camera_transition->to.yaw = from.yaw;
+    state.camera_transition->to.pitch = from.pitch;
+}
+
+void set_studio_size_protection(StudioState& state, bool enabled) {
+    if (!state.session.project().solar_system || state.demos.active() != DemoPreset::None ||
+        state.camera_transition || state.protect_display_sizes == enabled) return;
+    const double previous_scale = display_scale(state);
+    state.protect_display_sizes = enabled;
+    if (!state.simulation_follow_id.empty()) state.render.camera.zoom *= display_scale(state) / previous_scale;
+    state.selected_pixel_x = state.selected_pixel_y = -1;
+    ++state.scene_generation;
 }
 
 void begin_studio_simulation(StudioState& state) {
@@ -1419,6 +1523,7 @@ void begin_studio_simulation(StudioState& state) {
 
 void return_studio_design(StudioState& state) {
     if (state.session.mode() != SessionMode::Simulate) return;
+    cancel_studio_collision_replay(state);
     const RenderCamera from = world_camera(state);
     state.simulation_follow_id.clear();
     state.session.set_playing(false);
@@ -1427,11 +1532,12 @@ void return_studio_design(StudioState& state) {
         : std::nullopt;
     state.design_view = false;
     state.timeline_horizon = 80.0;
-    start_camera_transition(state, from, overview_camera(state),
+    start_camera_transition(state, from, overview_camera(state, true),
                             StudioCameraDestination::DesignOverview, {}, false, anchor);
 }
 
 void focus_studio_selected(StudioState& state) {
+    cancel_studio_collision_replay(state);
     const Project& project = state.session.project();
     const BodySpec& selected = project.bodies[state.selected];
     const SceneSnapshot snapshot = state.demos.snapshot(state.session.snapshot());
@@ -1450,7 +1556,7 @@ void focus_studio_selected(StudioState& state) {
     const bool following = state.session.mode() == SessionMode::Simulate &&
                            state.demos.active() == DemoPreset::None;
     to.zoom = following
-        ? design_zoom * (project.solar_system ? detail_extent(project, selected)
+        ? design_zoom * (project.solar_system ? detail_extent(state, selected)
                                              : visible_radius * project.display_scale) / project.view_extent
         : std::clamp(visible_radius * project.display_scale /
                          (project.view_extent * 0.55), 0.08, 1.0);
@@ -1461,6 +1567,7 @@ void focus_studio_selected(StudioState& state) {
 }
 
 void reset_studio_view(StudioState& state) {
+    cancel_studio_collision_replay(state);
     const RenderCamera from = state.simulation_follow_id.empty() ? state.render.camera : world_camera(state);
     state.simulation_follow_id.clear();
     RenderCamera to = overview_camera(state);
@@ -1564,6 +1671,7 @@ void advance_studio(StudioState& state, double real_seconds) {
         update_simulation_follow(state);
         return;
     }
+    if(advance_studio_collision_replay(state,real_seconds)) return;
     if (state.demos.active() == DemoPreset::Collision) {
         state.demos.advance(real_seconds, state.session.speed());
     } else {
@@ -1585,6 +1693,7 @@ void seek_studio_time(StudioState& state, double time) {
     if (state.session.mode() != SessionMode::Simulate ||
         !std::isfinite(time) || time > 100000.0) return;
     const double target = std::max(0.0, time);
+    cancel_studio_collision_replay(state);
     state.session.seek(target);
     update_simulation_follow(state);
     ++state.scene_generation;
@@ -1594,6 +1703,10 @@ void seek_studio_time(StudioState& state, double time) {
 StudioRenderInput make_studio_render_input(const StudioState& state) {
     StudioRenderInput result{state.demos.project(state.session.project()),
                              state.demos.snapshot(state.session.snapshot()), state.render};
+    if (state.demos.active() == DemoPreset::None) result.project.display_scale = display_scale(state);
+    if (!state.camera_transition && !state.design_view && !state.collision_replay &&
+        state.simulation_follow_id.empty() && inner_overview(state))
+        result.config.camera.target = overview_camera(state).target;
     if (!state.camera_transition && !state.simulation_follow_id.empty() &&
         state.session.mode() == SessionMode::Simulate) {
         if (const auto* body = simulation_follow_body(state, result.snapshot)) {
@@ -1698,11 +1811,17 @@ void draw_studio(StudioState& state, ImTextureID texture, const StudioRenderInpu
     } else {
         if (ImGui::Button("Design")) return_studio_design(state);
         ImGui::SameLine();
-        if (playback_button(state.session.playing(), state.compare_modes)) {
-            state.session.set_playing(!state.session.playing());
+        const bool playing=state.collision_replay?state.collision_replay->playing:state.session.playing();
+        if (playback_button(playing, state.compare_modes)) {
+            if(state.collision_replay) {
+                if(state.session.snapshot().time>=state.collision_replay->end_time)
+                    replay_studio_collision(state,state.collision_replay->event);
+                else state.collision_replay->playing=!state.collision_replay->playing;
+            } else state.session.set_playing(!state.session.playing());
         }
         ImGui::SameLine();
         if (ImGui::Button("Step")) {
+            cancel_studio_collision_replay(state);
             state.session.step(0.025);
             ++state.scene_generation;
             state.timeline_horizon = std::max(state.timeline_horizon,
@@ -1710,6 +1829,7 @@ void draw_studio(StudioState& state, ImTextureID texture, const StudioRenderInpu
         }
         ImGui::SameLine();
         if (ImGui::Button("Reset")) {
+            cancel_studio_collision_replay(state);
             state.session.reset_simulation();
             ++state.scene_generation;
             state.timeline_horizon = 80.0;
@@ -1717,7 +1837,9 @@ void draw_studio(StudioState& state, ImTextureID texture, const StudioRenderInpu
         ImGui::SameLine();
         float speed = static_cast<float>(state.session.speed());
         ImGui::SetNextItemWidth(130.0f);
+        ImGui::BeginDisabled(state.collision_replay.has_value());
         if (ImGui::SliderFloat("Speed", &speed, 0.1f, 20.0f, "%.1fx")) state.session.set_speed(speed);
+        ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::Text("t=%.3f", input.snapshot.time);
     }

@@ -21,6 +21,9 @@ struct Texture {
 Texture load_texture(const std::string& path);
 std::array<double, 4> sample_texture(const Texture& texture, double u, double v,
                                      bool wrap_u = true);
+// Selective samplers retain the RGBA sampler's filtering and validation semantics.
+double sample_texture_channel(const Texture& texture,double u,double v,int channel,bool wrap_u=true);
+double sample_texture_rgb_mean(const Texture& texture,double u,double v,bool wrap_u=true);
 std::string solar_asset_path(BodyKind kind, AssetLayer layer);
 const Texture& solar_texture(BodyKind kind, AssetLayer layer);
 double solar_height_sample(BodyKind kind, double u, double v);

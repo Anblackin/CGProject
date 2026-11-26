@@ -1019,7 +1019,12 @@ static void test_demo_collision_preserves_saved_design() {
     assert(impact.events[0].survivor == "earth");
     assert(impact.events[0].absorbed == "mars");
     assert(impact.bodies.size() == 1);
+    assert(demos.playing());
+    demos.advance(.1);
+    assert(demos.snapshot({}).time>impact.time);
+    for(int i=0;i<40 && demos.playing();++i) demos.advance(.1);
     assert(!demos.playing());
+    assert(demos.snapshot({}).time>=impact.events[0].time+1.5);
     std::ostringstream after;
     write_project(after, source);
     assert(after.str() == original.str());

@@ -171,6 +171,9 @@ bool load_studio_document(StudioState& state, const std::filesystem::path& path,
         ++state.scene_generation;
         state.camera_transition.reset();
         state.design_view = state.compare_baseline = false;
+        state.overview = StudioOverview::FullSystem;
+        state.simulation_follow_id.clear();
+        state.collision_replay.reset();
         state.render.camera = {};
         if (state.session.project().solar_system) state.render.camera.zoom = 0.55;
         state.sculpt_history.clear();

@@ -1,5 +1,6 @@
 #include "planet_sandbox/demo_presets.h"
 #include "planet_sandbox/solar_system.h"
+#include "planet_sandbox/impact_visual.h"
 
 #include <algorithm>
 #include <cmath>
@@ -75,9 +76,12 @@ void DemoPresets::step(double simulated_seconds) {
     if (!std::isfinite(simulated_seconds) || simulated_seconds <= 0.0) {
         throw std::invalid_argument("Demo step must be finite and positive");
     }
-    if (!collision_simulation_->snapshot().events.empty()) { playing_ = false; return; }
-    collision_simulation_->advance_to(collision_simulation_->snapshot().time + simulated_seconds);
-    if (!collision_simulation_->snapshot().events.empty()) playing_ = false;
+    const auto before=collision_simulation_->snapshot();
+    double target=before.time+simulated_seconds;
+    if(!before.events.empty()) target=std::min(target,before.events.front().time+impact_visual_lifetime);
+    if(target>before.time) collision_simulation_->advance_to(target);
+    const auto after=collision_simulation_->snapshot();
+    if(!after.events.empty() && after.time>=after.events.front().time+impact_visual_lifetime) playing_=false;
 }
 
 void DemoPresets::reset() {

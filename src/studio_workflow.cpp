@@ -1,6 +1,8 @@
 #include "planet_sandbox/studio_ui.h"
+#include "planet_sandbox/impact_visual.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace planet_sandbox {
 
@@ -90,14 +92,14 @@ bool studio_scene_annotations_visible(const StudioState& state) {
 
 bool replay_studio_collision(StudioState& state, const CollisionEvent& event) {
     if (state.session.mode() != SessionMode::Simulate || state.camera_transition ||
-        state.demos.active() == DemoPreset::Collision) return false;
+        state.demos.active() == DemoPreset::Collision || state.compare_modes) return false;
     const CollisionEvent bookmark = event;
     const auto& recorded = state.session.observed_events();
     if (std::none_of(recorded.begin(), recorded.end(), [&](const auto& known) {
             return known.time == bookmark.time && known.survivor == bookmark.survivor &&
                    known.absorbed == bookmark.absorbed;
         })) return false;
-    seek_studio_time(state, std::min(100000.0, bookmark.time + 0.05));
+    seek_studio_time(state, std::max(0.0, bookmark.time - .5));
     const auto snapshot = state.session.snapshot();
     auto survivor = bookmark.survivor;
     // A second impact in the same replay interval can merge the first survivor again.
@@ -108,6 +110,49 @@ bool replay_studio_collision(StudioState& state, const CollisionEvent& event) {
     const auto body = std::find_if(bodies.begin(), bodies.end(),
                                    [&](const auto& candidate) { return candidate.id == survivor; });
     if (body != bodies.end()) select_studio_scene_body(state, static_cast<int>(body - bodies.begin()));
+    state.simulation_follow_id.clear();
+    if(state.camera_transition && bookmark.contact) {
+        const auto& c=*bookmark.contact;
+        auto& to=state.camera_transition->to;
+        const double age=snapshot.time-bookmark.time;
+        to.target={c.position.x+c.velocity.x*age,c.position.y+c.velocity.y*age};
+        const auto input=make_studio_render_input(state);
+        const double merged=std::cbrt(c.survivor_radius*c.survivor_radius*c.survivor_radius+
+                                    c.absorbed_radius*c.absorbed_radius*c.absorbed_radius);
+        const double radius=merged*(input.project.solar_system && body!=bodies.end()
+            ?body->display_radius/body->radius:1.0);
+        const double extent=2.5*radius*input.project.display_scale+.5*c.relative_speed;
+        to.zoom=std::max(.01,extent/(1.35*input.project.view_extent));
+        state.camera_transition->screen_anchor.reset();
+        state.camera_transition->resume_playback=false;
+    }
+    state.collision_replay=StudioState::CollisionReplay{bookmark,
+        std::min(100000.0,bookmark.time+impact_visual_lifetime),true};
+    state.notice="Collision replay / 0.25x. Visual ejecta do not change the merge physics.";
+    return true;
+}
+
+void cancel_studio_collision_replay(StudioState& state) {
+    if(!state.collision_replay) return;
+    state.collision_replay.reset();
+    state.session.set_playing(false);
+}
+
+bool advance_studio_collision_replay(StudioState& state, double seconds) {
+    if(!state.collision_replay) return false;
+    if(state.session.mode()!=SessionMode::Simulate) { state.collision_replay.reset();return false; }
+    auto& replay=*state.collision_replay;
+    if(replay.playing && std::isfinite(seconds) && seconds>0) {
+        const double current=state.session.snapshot().time;
+        const double target=std::min(replay.end_time,current+std::min(seconds,.1)*.25);
+        if(target>current) state.session.step(target-current);
+        if(target>=replay.end_time) replay.playing=false;
+    }
+    if(replay.event.contact) {
+        const auto& c=*replay.event.contact;
+        const double age=state.session.snapshot().time-replay.event.time;
+        state.render.camera.target={c.position.x+c.velocity.x*age,c.position.y+c.velocity.y*age};
+    }
     return true;
 }
 

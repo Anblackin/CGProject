@@ -97,7 +97,13 @@ Texture load_texture(const std::string& path) {
     return texture;
 }
 
-std::array<double, 4> sample_texture(const Texture& texture, double u, double v, bool wrap_u) {
+namespace {
+struct TextureFootprint {
+    std::array<std::size_t,4> offsets;
+    double fx,fy;
+};
+
+TextureFootprint texture_footprint(const Texture& texture,double u,double v,bool wrap_u) {
     if (texture.width <= 0 || texture.height <= 0 ||
         texture.rgba.size() != static_cast<std::size_t>(texture.width) * texture.height * 4 ||
         !std::isfinite(u) || !std::isfinite(v)) {
@@ -111,15 +117,42 @@ std::array<double, 4> sample_texture(const Texture& texture, double u, double v,
     const int x1 = wrap_u ? (x0 + 1) % texture.width : std::min(x0 + 1, texture.width - 1);
     const int y1 = std::min(y0 + 1, texture.height - 1);
     const double fx = x - x0, fy = y - y0;
-    std::array<double, 4> color{};
-    for (int channel = 0; channel < 4; ++channel) {
-        const auto at = [&](int px, int py) {
-            return texture.rgba[(static_cast<std::size_t>(py) * texture.width + px) * 4 + channel] / 255.0;
-        };
-        color[channel] = (at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx) * (1.0 - fy) +
-                         (at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx) * fy;
-    }
+    const auto offset=[&](int px,int py){return (static_cast<std::size_t>(py)*texture.width+px)*4;};
+    return {{{offset(x0,y0),offset(x1,y0),offset(x0,y1),offset(x1,y1)}},fx,fy};
+}
+
+double interpolate_channel(const Texture& texture,const TextureFootprint& sample,int channel) {
+    const auto at=[&](int corner){return texture.rgba[sample.offsets[corner]+channel]/255.0;};
+    return (at(0)*(1.0-sample.fx)+at(1)*sample.fx)*(1.0-sample.fy)+
+           (at(2)*(1.0-sample.fx)+at(3)*sample.fx)*sample.fy;
+}
+} // namespace
+
+std::array<double,4> sample_texture(const Texture& texture,double u,double v,bool wrap_u) {
+    const auto sample=texture_footprint(texture,u,v,wrap_u);
+    std::array<double,4> color{};
+    for(int channel=0;channel<4;++channel) color[channel]=interpolate_channel(texture,sample,channel);
     return color;
+}
+
+double sample_texture_channel(const Texture& texture,double u,double v,int channel,bool wrap_u) {
+    if(channel<0 || channel>3) throw std::invalid_argument("Invalid texture channel");
+    return interpolate_channel(texture,texture_footprint(texture,u,v,wrap_u),channel);
+}
+
+double sample_texture_rgb_mean(const Texture& texture,double u,double v,bool wrap_u) {
+    const auto sample=texture_footprint(texture,u,v,wrap_u);
+    bool gray=true;
+    for(auto offset:sample.offsets) {
+        if(texture.rgba[offset]!=texture.rgba[offset+1] || texture.rgba[offset]!=texture.rgba[offset+2]) {
+            gray=false;break;
+        }
+    }
+    const double red=interpolate_channel(texture,sample,0);
+    // Keep the legacy averaging order even when all four RGB corners are grayscale.
+    if(gray) return (red+red+red)/3;
+    const double green=interpolate_channel(texture,sample,1),blue=interpolate_channel(texture,sample,2);
+    return (red+green+blue)/3;
 }
 
 std::string solar_asset_path(BodyKind kind, AssetLayer layer) {

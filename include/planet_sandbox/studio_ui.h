@@ -19,6 +19,7 @@ namespace planet_sandbox {
 enum class StudioCameraDestination { Design, Overview, Simulation, DesignOverview, Camera };
 
 enum class StudioWorkflowStage { Overview, Design, Simulation, Collision, Transition };
+enum class StudioOverview { FullSystem, InnerSystem };
 
 struct StudioWorkflow {
     StudioWorkflowStage stage = StudioWorkflowStage::Overview;
@@ -118,8 +119,17 @@ struct StudioState {
     std::string notice;
     int selected = 0;
     bool design_view = false;
+    // Presentation preferences never change saved scale or physical collision radii.
+    bool protect_display_sizes = true;
+    StudioOverview overview = StudioOverview::FullSystem;
     // Simulation camera follows a stable body ID without altering the scene.
     std::string simulation_follow_id;
+    struct CollisionReplay {
+        CollisionEvent event;
+        double end_time=0;
+        bool playing=true;
+    };
+    std::optional<CollisionReplay> collision_replay;
     bool compare_baseline = false;
     bool show_reference_orbit = true;
     double timeline_horizon = 80.0;
@@ -197,6 +207,8 @@ void select_studio_body(StudioState& state, int body_index);
 void select_studio_scene_body(StudioState& state, int body_index);
 void begin_studio_design_focus(StudioState& state, int body_index);
 void return_studio_overview(StudioState& state);
+void select_studio_overview(StudioState& state, StudioOverview overview);
+void set_studio_size_protection(StudioState& state, bool enabled);
 void begin_studio_simulation(StudioState& state);
 void return_studio_design(StudioState& state);
 void focus_studio_selected(StudioState& state);
@@ -204,6 +216,8 @@ void reset_studio_view(StudioState& state);
 double studio_timeline_limit(const StudioState& state);
 void seek_studio_time(StudioState& state, double time);
 bool replay_studio_collision(StudioState& state, const CollisionEvent& event);
+bool advance_studio_collision_replay(StudioState& state, double seconds);
+void cancel_studio_collision_replay(StudioState& state);
 bool apply_studio_edit(StudioState& state, Project project, const std::string& label,
                        const std::string& body_id = {}, const std::string& group = {});
 Project open_studio_project(const std::filesystem::path& path, bool create_if_missing);

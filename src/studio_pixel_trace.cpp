@@ -16,6 +16,7 @@ const char* surface_name(TraceSurface surface) {
     case TraceSurface::Trail: return "Trail";
     case TraceSurface::ReferenceTrail: return "Reference trail";
     case TraceSurface::Atmosphere: return "Atmosphere";
+    case TraceSurface::Impact: return "Impact glow";
     default: return "Background";
     }
 }
@@ -167,7 +168,10 @@ void draw_pixel_process(StudioState& state, const PixelTrace& trace) {
         passed += step.depth_test == TraceDepthTest::Passed;
         written += step.action == TraceAction::Written;
     }
-    if (event.primitive == TracePrimitive::Atmosphere) {
+    if (event.primitive == TracePrimitive::Impact) {
+        ImGui::TextWrapped("Impact sprite: %d samples covered; %d passed depth; %zu shading calls; %d color writes. Geometry depth and picking stay unchanged.",
+                           covered,passed,event.shading.size(),written);
+    } else if (event.primitive == TracePrimitive::Atmosphere) {
         ImGui::TextWrapped("%d sample rays intersected the atmosphere; %zu shading calls; %d color writes. Depth stays unchanged.",
                            covered, event.shading.size(), written);
     } else {
@@ -205,8 +209,8 @@ void draw_pixel_process(StudioState& state, const PixelTrace& trace) {
             const char* location=shading.location==TraceShadingLocation::PixelCenter?"Pixel center":
                 shading.location==TraceShadingLocation::CoverageCentroid?"Coverage centroid":
                 shading.location==TraceShadingLocation::CoveredSample?"Covered sample fallback":
-                event.primitive==TracePrimitive::Atmosphere && trace.sampling==SamplingMode::MSAA4
-                    ?"First eligible ray sample":"Sample position";
+                (event.primitive==TracePrimitive::Atmosphere || event.primitive==TracePrimitive::Impact) &&
+                    trace.sampling==SamplingMode::MSAA4 ?"First eligible sample":"Sample position";
             ImGui::TextWrapped("Location rule: %s.",location);
             if(shading.location!=TraceShadingLocation::Sample)
                 ImGui::TextWrapped("Chosen from geometry, independently of depth. The diamond is not an extra coverage sample.");
