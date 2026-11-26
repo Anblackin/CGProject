@@ -17,6 +17,36 @@ double stretch_latitude(double v, double center, double factor) {
 }
 } // namespace
 
+SphereMeshDetail sphere_mesh_detail(double radius) {
+    const auto smooth=[](double value){value=std::clamp(value,0.0,1.0);return value*value*(3-2*value);};
+    if(radius<=40) return {24,24,1};
+    if(radius<80) return {48,24,smooth((radius-40)/40)};
+    if(radius<=160) return {48,48,1};
+    if(radius<320) return {96,48,smooth((radius-160)/160)};
+    return {96,96,1};
+}
+double mesh_shape_multiplier(BodyKind kind,double u,double v,const DesignOverrides& design,
+                             SolarShapeLayer layer,const SphereMeshDetail& detail) {
+    const auto grid=[&](int latitude) {
+        const int longitude=latitude*2;
+        const double x=(u-std::floor(u))*longitude,y=std::clamp(v,0.0,1.0)*latitude;
+        const int col=static_cast<int>(x),row=static_cast<int>(y);
+        const double fx=x-col,fy=y-row;
+        const auto at=[&](int c,int r){return solar_shape_multiplier(kind,double(c)/longitude,
+            std::min(double(r)/latitude,1.0),design,layer);};
+        const double a=at(col,row);
+        if(fx==0 && fy==0) return a;
+        const double b=fx==0?a:at(col+1,row);
+        const double c=fy==0?a:at(col,row+1);
+        const double d=fx==0?c:fy==0?b:at(col+1,row+1);
+        return (a*(1-fx)+b*fx)*(1-fy)+(c*(1-fx)+d*fx)*fy;
+    };
+    const double fine=grid(detail.latitude_steps);
+    if(detail.morph>=1 || detail.coarse_latitude_steps==detail.latitude_steps) return fine;
+    const double coarse=grid(detail.coarse_latitude_steps);
+    return coarse+(fine-coarse)*detail.morph;
+}
+
 double ring_light_transmission(double opacity,double light_cosine) {
     const double alpha=std::clamp(opacity,0.0,1.0);
     if(alpha==0) return 1;

@@ -18,6 +18,13 @@ struct Texture {
     std::vector<std::uint8_t> rgba;
 };
 
+// Lower-resolution levels exclude the original texture and are immutable after construction.
+struct TextureMipmaps { std::vector<Texture> levels; };
+TextureMipmaps make_texture_mipmaps(const Texture& texture,bool srgb=true);
+std::array<double,4> sample_texture_lod(const Texture& texture,const TextureMipmaps& mipmaps,
+                                       double u,double v,double lod,bool wrap_u=true);
+const TextureMipmaps& solar_mipmaps(BodyKind kind,AssetLayer layer);
+
 Texture load_texture(const std::string& path);
 std::array<double, 4> sample_texture(const Texture& texture, double u, double v,
                                      bool wrap_u = true);

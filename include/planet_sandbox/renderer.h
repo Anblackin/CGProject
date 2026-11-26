@@ -99,6 +99,10 @@ struct RenderConfig {
     int trace_y = -1;
     bool trace_process = true; // Only applies to a selected pixel; disable for timing.
     bool impact_effects = true;
+    bool texture_filtering = true;
+    bool adaptive_geometry = true;
+    bool preview_light = false;
+    double light_azimuth = -.66,light_elevation = .67;
 };
 
 struct RenderFrame {
@@ -121,7 +125,7 @@ RenderFrame render_scene(const Project& project, const SceneSnapshot& snapshot,
                          const RenderConfig& config);
 RenderFrame render_comparison_scene(const Project& project, const SceneSnapshot& snapshot,
                                     const RenderConfig& config, SamplingMode left,
-                                    SamplingMode right, bool right_first = false);
+                                    SamplingMode right, bool right_first = false,const Project* right_project=nullptr);
 
 Image render_preview(const Project& project, const SceneSnapshot& snapshot, int width, int height);
 void write_ppm(std::ostream& output, const Image& image);

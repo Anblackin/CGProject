@@ -18,6 +18,10 @@ const VisualDetailMap& solar_detail_map(BodyKind kind, SolarShapeLayer layer);
 Vec2 sample_visual_detail(const VisualDetailMap& map, double u, double v);
 
 struct VisualVector { double x, y, z; };
+struct SphereMeshDetail { int latitude_steps=48,coarse_latitude_steps=48;double morph=1; };
+SphereMeshDetail sphere_mesh_detail(double projected_radius);
+double mesh_shape_multiplier(BodyKind kind,double u,double v,const DesignOverrides& design,
+                             SolarShapeLayer layer,const SphereMeshDetail& detail);
 // Signed light/view cosines identify the reflected and transmitted sides of a thin ring.
 double ring_light_transmission(double opacity,double light_cosine);
 double ring_reflectance(double opacity,double light_cosine,double view_cosine,double sunlight_visibility=1);

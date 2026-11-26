@@ -57,6 +57,9 @@ struct StudioRenderWorker::Impl {
 StudioRenderWorker::StudioRenderWorker(RenderFunction render) {
     if (!render) {
         render = [](const StudioRenderRequest& request) {
+            if(request.input.reference_project) return render_comparison_scene(*request.input.reference_project,
+                request.input.snapshot,request.input.config,request.input.config.sampling,request.input.config.sampling,
+                request.right_first,&request.input.project);
             return request.compare_modes
                 ? render_comparison_scene(request.input.project, request.input.snapshot,
                     request.input.config, request.left, request.right, request.right_first)

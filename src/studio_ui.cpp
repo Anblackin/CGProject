@@ -167,6 +167,7 @@ void select_body(StudioState& state, int index) {
         if (state.design_view && state.session.project().solar_system) state.render.camera.zoom = 0.55;
         state.design_view = false;
         state.compare_baseline = false;
+        state.compare_design = false;
         state.sculpt_stroke.end();
         state.sculpt_layer = SolarShapeLayer::Visible;
     }
@@ -631,6 +632,10 @@ void edit_solar_design(StudioState& state) {
         ImGui::SliderFloat("Strength", &state.sculpt_strength, 0.1f, 1.0f);
         ImGui::TextWrapped("Paint with the left mouse button. Rotate with the right. Ctrl/Cmd+Z undoes a stroke.");
     }
+}
+
+void draw_reset_body(StudioState& state) {
+    const auto kind=state.session.project().bodies[state.selected].kind;
     if (ImGui::Button("Reset this body", ImVec2(-1, 0))) {
         try {
             Project next = state.session.project();
@@ -727,7 +732,8 @@ void draw_sidebar(StudioState& state, float width) {
     ImGui::TextColored(state.history.dirty() ? ImVec4(1.0f, 0.76f, 0.36f, 1.0f) :
                                              ImVec4(0.58f, 0.74f, 0.64f, 1.0f),
                        "%s", state.history.dirty() ? "Unsaved changes" : "No unsaved changes");
-    const bool history_locked = !can_edit || state.compare_baseline;
+    const bool history_locked = !can_edit || state.compare_baseline ||
+        (state.design_view && state.compare_design);
     ImGui::BeginDisabled(history_locked || !state.history.can_undo());
     if (ImGui::Button("Undo", ImVec2((width - 28) * 0.5f, 0))) undo_studio_edit(state);
     if (state.history.can_undo()) ImGui::SetItemTooltip("Undo: %s", state.history.undo_label().c_str());
@@ -951,7 +957,7 @@ void draw_inspector(StudioState& state, const RenderFrame& frame, float width) {
             state.design_tab_active = true;
             ImGui::BeginDisabled(state.session.mode() != SessionMode::Design ||
                                  state.demos.active() == DemoPreset::Collision ||
-                                 (state.design_view && state.compare_baseline));
+                                 (state.design_view && (state.compare_baseline || state.compare_design)));
             if (state.session.project().solar_system && !state.design_view) {
                 ImGui::Spacing();
                 ImGui::TextWrapped("Shape %s using its original surface, atmosphere and features.", body.name.c_str());
@@ -965,6 +971,26 @@ void draw_inspector(StudioState& state, const RenderFrame& frame, float width) {
             } else if (state.session.project().solar_system) edit_solar_design(state);
             else edit_appearance(state);
             ImGui::EndDisabled();
+            if(state.session.project().solar_system && state.design_view && ImGui::CollapsingHeader("Design preview")) {
+                ImGui::BeginDisabled(state.compare_baseline || state.compare_modes);
+                if(ImGui::Button("Capture reference")) capture_studio_design_reference(state);
+                ImGui::BeginDisabled(!state.design_reference || state.design_reference_id!=body.id);
+                ImGui::Checkbox("Compare reference",&state.compare_design);
+                ImGui::EndDisabled();ImGui::EndDisabled();
+                if(state.compare_design) ImGui::TextWrapped("Reference / current design. Uncheck to sculpt.");
+                ImGui::Separator();
+                ImGui::Checkbox("Rotate preview light",&state.render.preview_light);
+                ImGui::BeginDisabled(!state.render.preview_light);
+                float azimuth=static_cast<float>(state.render.light_azimuth),elevation=static_cast<float>(state.render.light_elevation);
+                if(ImGui::SliderAngle("Light direction",&azimuth,-180,180)) state.render.light_azimuth=azimuth;
+                if(ImGui::SliderAngle("Light height",&elevation,-80,80)) state.render.light_elevation=elevation;
+                ImGui::EndDisabled();
+                ImGui::TextWrapped("Preview lighting only. Simulation follows the Sun.");
+            }
+            if(state.session.project().solar_system && state.design_view) {
+                ImGui::BeginDisabled(state.compare_baseline || state.compare_design);
+                draw_reset_body(state);ImGui::EndDisabled();
+            }
           }
             ImGui::EndTabItem();
         }
@@ -1211,9 +1237,9 @@ void draw_scene(StudioState& state, ImTextureID texture, const StudioRenderInput
         draw->AddLine({middle, top_left.y}, {middle, top_left.y + size.y},
                       IM_COL32(245, 245, 245, 220), 1.0f);
         draw->AddText({top_left.x + 8.0f, top_left.y + 8.0f}, IM_COL32(230, 235, 240, 255),
-                      sampling_name(frame.panel_sampling[0]));
+                      input.reference_project?"Reference":sampling_name(frame.panel_sampling[0]));
         draw->AddText({middle + 8.0f, top_left.y + 8.0f}, IM_COL32(230, 235, 240, 255),
-                      sampling_name(frame.panel_sampling[1]));
+                      input.reference_project?"Current design":sampling_name(frame.panel_sampling[1]));
     }
     if (state.inspect_pixel && frame.trace) {
         const auto region = studio_pixel_region(frame, frame.trace->x, frame.trace->y,
@@ -1270,6 +1296,7 @@ void draw_scene(StudioState& state, ImTextureID texture, const StudioRenderInput
     const bool design_canvas = state.design_view && state.session.project().solar_system &&
                                state.session.mode() == SessionMode::Design;
     const bool sculpting = design_canvas && state.design_tab_active && !state.inspect_pixel && !state.compare_modes &&
+                           !state.compare_design &&
                            !state.pixel_tab_active &&
                            !state.camera_transition;
     const bool simulation_closeup = state.session.mode() == SessionMode::Simulate &&
@@ -1290,6 +1317,21 @@ void draw_scene(StudioState& state, ImTextureID texture, const StudioRenderInput
             state.frame_cache.displayed_input ? "Updating view..." : "Loading view...");
     }
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !frame_interactive) state.sculpt_stroke.end();
+    if(frame_interactive && sculpting && !state.compare_baseline && mouse_over_scene) {
+        const auto mouse=ImGui::GetMousePos();
+        const int x=static_cast<int>((mouse.x-top_left.x)/fit),screen_y=static_cast<int>((mouse.y-top_left.y)/fit);
+        const int y=flip_image_y?image_height-1-screen_y:screen_y;
+        auto outline_input=input;
+        if(state.frame_cache.displayed_input) outline_input=*state.frame_cache.displayed_input;
+        const auto outline=studio_brush_outline(outline_input,frame,state.selected,x,y,state.sculpt_radius,state.sculpt_layer);
+        const ImU32 color=state.sculpt_mode==SculptMode::Lower?IM_COL32(255,164,115,240):
+            state.sculpt_mode==SculptMode::Smooth?IM_COL32(170,170,255,240):IM_COL32(100,235,210,240);
+        for(const auto& segment:outline) {
+            const auto screen=[&](Vec2 p){return ImVec2(top_left.x+float(p.x)*fit,
+                top_left.y+float(flip_image_y?image_height-p.y:p.y)*fit);};
+            ImGui::GetWindowDrawList()->AddLine(screen(segment.first),screen(segment.second),color,1.8f);
+        }
+    }
     if (frame_interactive && sculpting && !state.compare_baseline && mouse_over_scene &&
         ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const ImVec2 mouse = ImGui::GetMousePos();
@@ -1449,6 +1491,7 @@ void select_studio_scene_body(StudioState& state, int body_index) {
 }
 
 void return_studio_overview(StudioState& state) {
+    state.compare_design=false;
     cancel_studio_collision_replay(state);
     if (state.session.mode() == SessionMode::Simulate) {
         reset_studio_view(state);
@@ -1497,6 +1540,7 @@ void set_studio_size_protection(StudioState& state, bool enabled) {
 
 void begin_studio_simulation(StudioState& state) {
     if (state.session.mode() != SessionMode::Design) return;
+    state.compare_design=false;
     state.simulation_follow_id.clear();
     const DemoPreset preset = state.demos.active();
     const int focused = state.selected;
@@ -1603,6 +1647,7 @@ void activate_studio_preset(StudioState& state, DemoPreset preset) {
     }
     state.sculpt_stroke.end();
     state.compare_baseline = false;
+    state.compare_design = false;
     state.compare_modes = state.compare_modes && preset != DemoPreset::Collision;
     state.inspect_pixel = state.compare_modes;
     state.selected_pixel_x = state.selected_pixel_y = -1;
@@ -1703,6 +1748,8 @@ void seek_studio_time(StudioState& state, double time) {
 StudioRenderInput make_studio_render_input(const StudioState& state) {
     StudioRenderInput result{state.demos.project(state.session.project()),
                              state.demos.snapshot(state.session.snapshot()), state.render};
+    result.config.preview_light=state.render.preview_light && state.design_view &&
+        state.session.mode()==SessionMode::Design && !state.camera_transition && state.demos.active()==DemoPreset::None;
     if (state.demos.active() == DemoPreset::None) result.project.display_scale = display_scale(state);
     if (!state.camera_transition && !state.design_view && !state.collision_replay &&
         state.simulation_follow_id.empty() && inner_overview(state))
@@ -1742,8 +1789,13 @@ StudioRenderInput make_studio_render_input(const StudioState& state) {
                                selected.kind == BodyKind::Uranus ? 1.4 : 0.95;
         result.project.view_extent = selected.display_radius * result.project.display_scale * framing;
         result.config.camera.target = {};
+        if(state.compare_design && !state.compare_baseline && !state.compare_modes && state.design_reference &&
+           state.design_reference_id==selected.id) {
+            result.reference_project=result.project;
+            result.reference_project->bodies[state.selected].design=*state.design_reference;
+        }
     }
-    if (state.compare_modes) {
+    if (state.compare_modes || result.reference_project) {
         result.config.width = std::max(1, result.config.width / 2);
         result.config.camera.zoom *= 2.0;
     }
@@ -1757,6 +1809,8 @@ StudioRenderInput make_studio_render_input(const StudioState& state) {
 }
 
 RenderFrame render_studio_frame(const StudioState& state, const StudioRenderInput& input) {
+    if(input.reference_project) return render_comparison_scene(*input.reference_project,input.snapshot,input.config,
+        input.config.sampling,input.config.sampling,false,&input.project);
     if (state.compare_modes) {
         return render_comparison_scene(input.project, input.snapshot, input.config,
                                        state.compare_left, state.compare_right);

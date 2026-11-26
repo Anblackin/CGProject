@@ -155,6 +155,55 @@ double sample_texture_rgb_mean(const Texture& texture,double u,double v,bool wra
     return (red+green+blue)/3;
 }
 
+TextureMipmaps make_texture_mipmaps(const Texture& texture,bool srgb) {
+    sample_texture(texture,0,0);
+    TextureMipmaps result;
+    const Texture* previous=&texture;
+    while(previous->width>1 || previous->height>1) {
+        const int width=std::max(1,previous->width/2),height=std::max(1,previous->height/2);
+        Texture next{width,height,std::vector<std::uint8_t>(static_cast<std::size_t>(width)*height*4)};
+        for(int y=0;y<height;++y) for(int x=0;x<width;++x) {
+            const int x0=x*previous->width/width,x1=(x+1)*previous->width/width;
+            const int y0=y*previous->height/height,y1=(y+1)*previous->height/height;
+            for(int c=0;c<4;++c) {
+                double sum=0;
+                for(int py=y0;py<y1;++py) for(int px=x0;px<x1;++px) {
+                    const double value=previous->rgba[(static_cast<std::size_t>(py)*previous->width+px)*4+c]/255.0;
+                    sum+=srgb && c<3?std::pow(value,2.2):value;
+                }
+                double average=sum/((x1-x0)*(y1-y0));
+                if(srgb && c<3) average=std::pow(average,1/2.2);
+                next.rgba[(static_cast<std::size_t>(y)*width+x)*4+c]=static_cast<std::uint8_t>(std::round(average*255));
+            }
+        }
+        result.levels.push_back(std::move(next));previous=&result.levels.back();
+    }
+    return result;
+}
+
+std::array<double,4> sample_texture_lod(const Texture& texture,const TextureMipmaps& mipmaps,
+                                      double u,double v,double lod,bool wrap_u) {
+    if(!std::isfinite(lod)) throw std::invalid_argument("Invalid texture LOD");
+    lod=std::clamp(lod,0.0,double(mipmaps.levels.size()));
+    const int low=static_cast<int>(lod),high=std::min(low+1,int(mipmaps.levels.size()));
+    const auto level=[&](int index)->const Texture& {return index==0?texture:mipmaps.levels[index-1];};
+    auto result=sample_texture(level(low),u,v,wrap_u);
+    if(high==low || lod==low) return result;
+    const auto next=sample_texture(level(high),u,v,wrap_u);
+    for(int c=0;c<4;++c) result[c]+= (next[c]-result[c])*(lod-low);
+    return result;
+}
+
+const TextureMipmaps& solar_mipmaps(BodyKind kind,AssetLayer layer) {
+    static std::mutex mutex;
+    static std::map<std::pair<BodyKind,AssetLayer>,TextureMipmaps> cache;
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto key=std::make_pair(kind,layer);
+    auto found=cache.find(key);
+    if(found==cache.end()) found=cache.emplace(key,make_texture_mipmaps(solar_texture(kind,layer),layer!=AssetLayer::Clouds)).first;
+    return found->second;
+}
+
 std::string solar_asset_path(BodyKind kind, AssetLayer layer) {
     std::string name;
     switch (layer) {

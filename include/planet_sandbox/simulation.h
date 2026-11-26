@@ -53,9 +53,11 @@ public:
 
     void advance_to(double time);
     SceneSnapshot snapshot() const;
+    std::unique_ptr<Simulation> clone() const;
 
 private:
     struct Impl;
+    explicit Simulation(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
 };
 

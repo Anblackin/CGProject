@@ -132,6 +132,10 @@ struct Material {
     const Texture* color_map = nullptr;
     const Texture* cloud_map = nullptr;
     const Texture* ring_map = nullptr;
+    const TextureMipmaps* color_mips=nullptr,*cloud_mips=nullptr,*ring_mips=nullptr;
+    double projected_radius=0;
+    SphereMeshDetail mesh_detail;
+    bool adaptive_geometry=false;
     bool cloud_pass = false;
     bool venus_surface_pass = false;
     bool venus_cloud_pass = false;
@@ -169,15 +173,33 @@ double shape_envelope(BodyKind kind, const DesignOverrides& d) {
     }
 }
 
-double ring_opacity(const Material& m, double radial) {
+double material_lod(const Texture& texture,double projected_radius,double span,double incidence=1) {
+    return std::max(0.0,std::log2(texture.width/std::max(1.0,span*projected_radius))-
+                         .5*std::log2(std::max(.08,std::abs(incidence))));
+}
+
+double ring_opacity(const Material& m, double radial,double incidence=1) {
     if (radial < 0.0 || radial > 1.0) return 0.0;
-    const double gap = smoothstep(m.design->cassini_gap * .008,
-                                  m.design->cassini_gap * .013 + .001, std::abs(radial - .68));
-    return sample_texture_channel(*m.ring_map,radial,.5,3,false) * gap *
+    const auto gap_at=[&](double position){return smoothstep(m.design->cassini_gap*.008,
+        m.design->cassini_gap*.013+.001,std::abs(position-.68));};
+    double gap=gap_at(radial);
+    if(m.ring_mips) {
+        const double footprint=1/std::max(1.0,m.projected_radius*1.25*std::max(.08,std::abs(incidence)));
+        gap=.5*gap+.25*gap_at(radial-footprint*.5)+.25*gap_at(radial+footprint*.5);
+    }
+    const double alpha=m.ring_mips?sample_texture_lod(*m.ring_map,*m.ring_mips,radial,.5,
+        material_lod(*m.ring_map,m.projected_radius,1.25,incidence),false)[3]:
+        sample_texture_channel(*m.ring_map,radial,.5,3,false);
+    return alpha * gap *
            std::clamp(m.design->ring_width, 0.0, 1.0);
 }
 
 double cloud_mask(const Material& m, double u, double v) {
+    if(m.cloud_mips) {
+        const auto value=sample_texture_lod(*m.cloud_map,*m.cloud_mips,u+m.design->cloud_motion*m.time*.006,v,
+            material_lod(*m.cloud_map,m.projected_radius,2*pi));
+        return (value[0]+value[1]+value[2])/3;
+    }
     return sample_texture_rgb_mean(*m.cloud_map,u+m.design->cloud_motion*m.time*.006,v);
 }
 
@@ -215,6 +237,8 @@ Vec3 detailed_normal(const Material& m, double u, double v, Vec2 source, Vec3 no
     double amplitude = m.kind == BodyKind::Earth ? .012 : m.kind == BodyKind::Mars ? .045 :
                        m.kind == BodyKind::Mercury ? .035 : .012;
     amplitude *= d.surface_detail * (m.venus_surface_pass ? d.radar_relief : d.relief) * fade;
+    if(m.color_mips) amplitude*=smoothstep(20,40,m.projected_radius)/
+        (1+material_lod(*m.color_map,m.projected_radius,2*pi));
     const double du = std::clamp(slope.x * amplitude / (2 * pi * std::max(.12, latitude)), -.65, .65);
     const double dv = std::clamp(slope.y * amplitude / pi, -.65, .65);
     return perturb_visual_normal(normal, radial, m.pole, du, dv);
@@ -224,7 +248,9 @@ Color surface_color(const Material& material, double u, double v, Vec3 normal, V
     const auto& a = material.appearance;
     if (material.color_map) {
         const auto source = solar_visual_uv(material.kind, u, v, *material.design);
-        const auto texel = sample_texture(*material.color_map, source.x, source.y);
+        const auto texel = material.color_mips?sample_texture_lod(*material.color_map,*material.color_mips,source.x,source.y,
+            material_lod(*material.color_map,material.projected_radius,2*pi,dot(normal,view))):
+            sample_texture(*material.color_map, source.x, source.y);
         Color color{std::pow(texel[0], 2.2), std::pow(texel[1], 2.2),
                     std::pow(texel[2], 2.2)};
         const DesignOverrides& design = *material.design;
@@ -277,7 +303,7 @@ Color surface_color(const Material& material, double u, double v, Vec3 normal, V
             const double distance = ring_plane_radius((world - material.center) * (1.0 / material.radius),
                                                        material.light, material.ring_normal);
             if (distance >= 1.18 && distance <= 2.43)
-                transmission *= ring_light_transmission(ring_opacity(material,(distance-1.18)/1.25),
+                transmission *= ring_light_transmission(ring_opacity(material,(distance-1.18)/1.25,dot(material.ring_normal,material.light)),
                                                         dot(material.ring_normal,material.light));
         }
         const double ocean=material.kind==BodyKind::Earth?
@@ -354,8 +380,10 @@ Fragment shade_fragment(const Material& material, double u, double v, Vec3 norma
         return {scale({.93,.96,1.0},reflected.brightness),reflected.alpha<.005?0.0:reflected.alpha,FragmentBlend::Cloud};
     }
     if (ring && material.ring_map) {
-        const auto texel = sample_texture(*material.ring_map, u, v, false);
-        const double alpha = ring_opacity(material,u);
+        const auto texel = material.ring_mips?sample_texture_lod(*material.ring_map,*material.ring_mips,u,v,
+            material_lod(*material.ring_map,material.projected_radius,1.25,dot(normal,view)),false):
+            sample_texture(*material.ring_map, u, v, false);
+        const double alpha = ring_opacity(material,u,dot(normal,view));
         const Vec3 relative = (world - material.center) * (1.0 / material.radius);
         const double visibility = planet_blocks_light(relative, material.light, 1.0) ? 0.0 : 1.0;
         const double light=ring_reflectance(alpha,dot(normal,material.light),dot(normal,view),visibility);
@@ -1111,8 +1139,8 @@ private:
 
 void draw_sphere(Rasterizer& rasterizer, const BodyState& body, const Material& material,
                  int body_index, double scale_factor, double time) {
-    const int latitude_steps = material.color_map ? 48 : 16;
-    const int longitude_steps = material.color_map ? 96 : 32;
+    const int latitude_steps = material.color_map ? material.mesh_detail.latitude_steps : 16;
+    const int longitude_steps = latitude_steps*2;
     const auto rotation=body_surface_rotation(material.kind,material.appearance.seed,
         material.design?material.design->axis_tilt_offset:0.0,time);
     const double radius = body.radius * scale_factor;
@@ -1127,11 +1155,9 @@ void draw_sphere(Rasterizer& rasterizer, const BodyState& body, const Material& 
             const Vec3 normal=rotation.to_world(local);
             double relief = 1.0;
             if (material.color_map && !material.cloud_pass) {
-                relief = solar_shape_multiplier(
-                    material.kind, static_cast<double>(col) / longitude_steps,
-                    static_cast<double>(row) / latitude_steps, *material.design,
-                    material.venus_surface_pass ? SolarShapeLayer::VenusRadar :
-                                                  SolarShapeLayer::Visible);
+                const auto layer=material.venus_surface_pass?SolarShapeLayer::VenusRadar:SolarShapeLayer::Visible;
+                relief=mesh_shape_multiplier(material.kind,double(col)/longitude_steps,double(row)/latitude_steps,
+                                              *material.design,layer,material.mesh_detail);
             }
             if (material.cloud_pass) {
                 relief = material.cloud_radius;
@@ -1171,7 +1197,8 @@ void draw_ring(Rasterizer& rasterizer, const BodyState& body, const Material& ma
     const double ring_width = material.ring_map || material.kind == BodyKind::Uranus
         ? material.design->ring_width : material.appearance.ring_width;
     if (ring_width <= 0.0) return;
-    constexpr int segments = 72;
+    const int segments=material.adaptive_geometry?(material.projected_radius>160?144:
+        material.projected_radius>40?96:48):72;
     const double radius = body.radius * scale_factor;
     const double inner = radius * (material.kind == BodyKind::Uranus ? 1.32 : 1.18);
     const double outer = inner + radius * (material.kind == BodyKind::Uranus ? 0.12 :
@@ -1213,6 +1240,7 @@ RenderFrame render_scene(const Project& project, const SceneSnapshot& snapshot,
         !std::isfinite(config.camera.yaw) || !std::isfinite(config.camera.pitch) ||
         !std::isfinite(config.camera.zoom) || config.camera.zoom <= 0.0 ||
         !std::isfinite(config.camera.target.x) || !std::isfinite(config.camera.target.y) ||
+        !std::isfinite(config.light_azimuth) || !std::isfinite(config.light_elevation) ||
         (config.sampling != SamplingMode::Single && config.sampling != SamplingMode::SSAA4 &&
          config.sampling != SamplingMode::MSAA4 && config.sampling != SamplingMode::SSAA16) ||
         ((config.trace_x != -1 || config.trace_y != -1) &&
@@ -1235,6 +1263,9 @@ RenderFrame render_scene(const Project& project, const SceneSnapshot& snapshot,
         m.light = project.solar_system && sun != snapshot.bodies.end() && body.id != "sun"
             ? normalize(Vec3{sun->position.x, sun->position.y, 0} - m.center)
             : normalize(Vec3{-.48, .62, .62});
+        if(config.preview_light && sun==snapshot.bodies.end()) m.light={
+            std::sin(config.light_azimuth)*std::cos(config.light_elevation),
+            std::sin(config.light_elevation),std::cos(config.light_azimuth)*std::cos(config.light_elevation)};
         if (!m.design) return;
         m.ring_normal = ring_normal_for(m.kind, *m.design);
         if (m.kind == BodyKind::Uranus) m.pole = m.ring_normal;
@@ -1243,6 +1274,14 @@ RenderFrame render_scene(const Project& project, const SceneSnapshot& snapshot,
         if (m.kind == BodyKind::Earth) m.cloud_map = &solar_texture(m.kind, AssetLayer::Clouds);
         const double projected_radius = config.height * m.radius /
             (2 * half_fov_tangent * std::max(near_plane, rasterizer.camera_depth(m.center) - m.radius));
+        m.projected_radius=projected_radius;
+        m.adaptive_geometry=config.adaptive_geometry;
+        if(config.adaptive_geometry) m.mesh_detail=sphere_mesh_detail(projected_radius);
+        if(config.texture_filtering) {
+            if(m.color_map) m.color_mips=&solar_mipmaps(m.kind,m.venus_surface_pass?AssetLayer::VenusSurface:AssetLayer::Color);
+            if(m.cloud_map) m.cloud_mips=&solar_mipmaps(m.kind,AssetLayer::Clouds);
+            if(m.ring_map) m.ring_mips=&solar_mipmaps(m.kind,AssetLayer::Ring);
+        }
         if (detail && projected_radius >= 20 && m.kind != BodyKind::Sun && m.design->surface_detail > 0) {
             m.detail = &solar_detail_map(m.kind, m.venus_surface_pass ? SolarShapeLayer::VenusRadar :
                                                                  SolarShapeLayer::Visible);

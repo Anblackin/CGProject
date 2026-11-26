@@ -13,6 +13,16 @@ SandboxSession::SandboxSession(Project project) : project_(std::move(project)) {
     simulation_.reset(new Simulation(project_));
 }
 
+void SandboxSession::cache_checkpoint() {
+    if(mode_!=SessionMode::Simulate) return;
+    const double time=simulation_->snapshot().time;
+    for(const auto& checkpoint:checkpoints_) if(std::abs(checkpoint.time-time)<.5) return;
+    Checkpoint checkpoint{time,simulation_->clone(),reference_simulation_?reference_simulation_->clone():nullptr};
+    // Keep the initial state, and bound both integrator and trail-history memory.
+    if(checkpoints_.size()>=16) checkpoints_.erase(checkpoints_.begin()+1);
+    checkpoints_.push_back(std::move(checkpoint));
+}
+
 std::optional<SceneSnapshot> SandboxSession::reference_snapshot() const {
     if (!reference_simulation_) return std::nullopt;
     return reference_simulation_->snapshot();
@@ -34,6 +44,7 @@ void SandboxSession::replace_project(Project project) {
     auto next = std::make_unique<Simulation>(project);
     project_ = std::move(project);
     simulation_ = std::move(next);
+    checkpoints_.clear();last_seek_origin_=0;
     ++project_revision_;
 }
 
@@ -108,6 +119,7 @@ void SandboxSession::begin_simulation() {
     record_events();
     mode_ = SessionMode::Simulate;
     playing_ = true;
+    checkpoints_.clear();last_seek_origin_=0;cache_checkpoint();
 }
 
 void SandboxSession::return_to_design() {
@@ -116,6 +128,7 @@ void SandboxSession::return_to_design() {
     observed_events_.clear();
     mode_ = SessionMode::Design;
     playing_ = false;
+    checkpoints_.clear();last_seek_origin_=0;
 }
 
 void SandboxSession::reset_simulation() {
@@ -125,6 +138,7 @@ void SandboxSession::reset_simulation() {
     observed_events_.clear();
     record_events();
     playing_ = false;
+    checkpoints_.clear();last_seek_origin_=0;cache_checkpoint();
 }
 
 void SandboxSession::set_playing(bool playing) {
@@ -150,6 +164,7 @@ void SandboxSession::advance(double real_seconds) {
     simulation_->advance_to(time);
     if (reference_simulation_) reference_simulation_->advance_to(time);
     record_events();
+    cache_checkpoint();
 }
 
 void SandboxSession::step(double simulated_seconds) {
@@ -161,6 +176,7 @@ void SandboxSession::step(double simulated_seconds) {
     simulation_->advance_to(time);
     if (reference_simulation_) reference_simulation_->advance_to(time);
     record_events();
+    cache_checkpoint();
 }
 
 void SandboxSession::seek(double simulated_time) {
@@ -169,15 +185,23 @@ void SandboxSession::seek(double simulated_time) {
         throw std::invalid_argument("Seek time must be finite and between 0 and 100000");
     }
     playing_ = false;
-    if (simulated_time < simulation_->snapshot().time) {
-        simulation_ = std::make_unique<Simulation>(project_);
-        if (reference_simulation_) {
-            reference_simulation_ = std::make_unique<Simulation>(make_solar_system_project());
-        }
+    const double current=simulation_->snapshot().time;
+    const Checkpoint* nearest=nullptr;
+    for(const auto& checkpoint:checkpoints_)
+        if(checkpoint.time<=simulated_time && (!nearest || checkpoint.time>nearest->time)) nearest=&checkpoint;
+    if(nearest && (simulated_time<current || nearest->time>current)) {
+        auto restored=nearest->simulation->clone();
+        auto reference=nearest->reference?nearest->reference->clone():nullptr;
+        simulation_=std::move(restored);reference_simulation_=std::move(reference);
+    } else if(simulated_time<current) {
+        simulation_=std::make_unique<Simulation>(project_);
+        if(reference_simulation_) reference_simulation_=std::make_unique<Simulation>(make_solar_system_project());
     }
+    last_seek_origin_=simulation_->snapshot().time;
     simulation_->advance_to(simulated_time);
     if (reference_simulation_) reference_simulation_->advance_to(simulated_time);
     record_events();
+    cache_checkpoint();
 }
 
 } // namespace planet_sandbox

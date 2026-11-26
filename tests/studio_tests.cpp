@@ -19,6 +19,61 @@
 
 using namespace planet_sandbox;
 
+static void test_design_reference_light_and_brush_feedback() {
+    StudioState state(make_solar_system_project(),"design-tools.json");
+    state.selected=4;state.design_view=true;state.render.width=180;state.render.height=160;state.render.camera.zoom=1.15;
+    const auto original=project_document(state.session.project());
+    capture_studio_design_reference(state);
+    assert(state.design_reference && state.design_reference_id=="mars");
+    auto edited=state.session.project();edited.bodies[4].design.relief=3;
+    state.session.replace_project(edited);state.compare_design=true;
+    state.render.preview_light=true;state.render.light_azimuth=1.2;
+    auto input=make_studio_render_input(state);
+    assert(input.reference_project && input.config.preview_light);
+    assert(input.reference_project->bodies[4].design.relief==1);
+    assert(input.project.bodies[4].design.relief==3);
+    const auto compared=render_studio_frame(state,input);
+    assert(compared.panel_count==2);
+    const auto& cached=update_studio_frame(state,input,0);
+    assert(cached.panel_count==2 && cached.image.rgb==compared.image.rgb);
+    bool different=false;
+    for(int y=0;y<compared.image.height;++y) for(int x=0;x<compared.image.width/2;++x)
+        for(int c=0;c<3;++c) different|=compared.image.rgb[(y*compared.image.width+x)*3+c]!=
+            compared.image.rgb[(y*compared.image.width+x+compared.image.width/2)*3+c];
+    assert(different);
+    state.compare_design=false;state.render.width=180;state.render.height=160;
+    input=make_studio_render_input(state);
+    const auto frame=render_studio_frame(state,input);
+    auto default_light=input;default_light.config.preview_light=false;
+    assert(render_studio_frame(state,default_light).image.rgb!=frame.image.rgb);
+    int pixel=-1;
+    for(std::size_t p=0;p<frame.body_index.size();++p)
+        if(frame.body_index[p]==4 && frame.surface_uv[p].x>=0) {pixel=static_cast<int>(p);break;}
+    assert(pixel>=0);
+    // A center pick gives a complete visible contour; background picks give none.
+    const auto outline=studio_brush_outline(input,frame,4,90,80,.2,SolarShapeLayer::Visible);
+    assert(outline.size()>16);
+    assert(studio_brush_outline(input,frame,4,0,0,.2,SolarShapeLayer::Visible).empty());
+    state.design_view=false;state.session.begin_simulation();
+    assert(!make_studio_render_input(state).config.preview_light);
+    assert(!make_studio_render_input(state).reference_project);
+    assert(original!=project_document(state.session.project()));
+}
+
+static void test_reference_comparison_clears_when_leaving_design_focus() {
+    StudioState state(make_solar_system_project(),"compare-lifecycle.json");
+    state.selected=3;state.design_view=true;
+    capture_studio_design_reference(state);state.compare_design=true;
+    return_studio_overview(state);
+    assert(!state.compare_design);
+    while(state.camera_transition) advance_studio(state,.1);
+    select_studio_body(state,3);
+    while(state.camera_transition) advance_studio(state,.1);
+    state.compare_design=true;
+    begin_studio_simulation(state);
+    assert(!state.compare_design);
+}
+
 static void test_workflow_guidance_follows_the_active_tool() {
     StudioState state(make_solar_system_project(), "workflow.json");
     state.selected = 3;
@@ -1222,7 +1277,8 @@ static void test_simulation_closeup_tracks_live_state_and_keeps_scene() {
         const auto marker = std::find_if(markers.begin(), markers.end(),
             [&](const auto& candidate) { return candidate.body_index == selected; });
         assert(marker != markers.end());
-        assert(marker->max_y - marker->min_y > input.config.height / 4);
+        // Bounds include both endpoint pixels; filtered rings can cover one extra surface row.
+        assert(marker->max_y - marker->min_y + 1 > input.config.height / 4);
         assert(frame.body_index[(input.config.height / 2) * input.config.width + input.config.width / 2] == selected);
 
         const auto start = input.config.camera.target;
@@ -1706,6 +1762,8 @@ static void test_auto_measurement_reuses_frames_and_invalidates() {
 }
 
 int main() {
+    test_reference_comparison_clears_when_leaving_design_focus();
+    test_design_reference_light_and_brush_feedback();
     test_old_frame_markers_do_not_relabel_a_changed_catalog();
     test_collision_demo_inspector_uses_its_temporary_initial_conditions();
     test_orbit_tab_does_not_paint_the_closeup();

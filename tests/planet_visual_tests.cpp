@@ -242,6 +242,51 @@ static void test_latitude_detail_tilts_normal_against_increasing_height() {
     assert(flat.x == 1 && flat.y == 0 && flat.z == 0);
 }
 
+static void test_adaptive_mesh_budgets_and_relief_transition() {
+    assert(sphere_mesh_detail(5).latitude_steps==24);
+    assert(sphere_mesh_detail(1000).latitude_steps==96);
+    for(double size:{0.0,20.0,40.0,60.0,80.0,160.0,240.0,320.0,10000.0}) {
+        const auto detail=sphere_mesh_detail(size);
+        assert(detail.latitude_steps>=24 && detail.latitude_steps<=96);
+        assert(detail.coarse_latitude_steps<=detail.latitude_steps && detail.morph>=0 && detail.morph<=1);
+    }
+    auto design=baseline_design(BodyKind::Mars);design.relief=4;
+    for(double boundary:{40.0,80.0,160.0,320.0}) {
+        const auto before=sphere_mesh_detail(boundary-1e-5),after=sphere_mesh_detail(boundary+1e-5);
+        for(double u:{0.0,.137,.5,.999,1.0}) for(double v:{0.0,.231,.7,1.0}) {
+            const auto a=mesh_shape_multiplier(BodyKind::Mars,u,v,design,SolarShapeLayer::Visible,before);
+            const auto b=mesh_shape_multiplier(BodyKind::Mars,u,v,design,SolarShapeLayer::Visible,after);
+            assert(std::abs(a-b)<1e-6);
+        }
+    }
+    const auto fine=sphere_mesh_detail(1000);
+    assert(mesh_shape_multiplier(BodyKind::Mars,.125,.25,design,SolarShapeLayer::Visible,fine)==
+           solar_shape_multiplier(BodyKind::Mars,.125,.25,design));
+}
+
+static void test_texture_mipmaps_reduce_subpixel_contrast() {
+    Texture checker{8,8,std::vector<std::uint8_t>(8*8*4)};
+    for(int y=0;y<8;++y) for(int x=0;x<8;++x) {
+        for(int c=0;c<3;++c) checker.rgba[(y*8+x)*4+c]=((x+y)%2)*255;
+        checker.rgba[(y*8+x)*4+3]=255;
+    }
+    const auto mip=make_texture_mipmaps(checker,false);
+    assert(mip.levels.size()==3 && mip.levels.back().width==1 && mip.levels.back().height==1);
+    for(double u:{0.0,.1,.4,.9,1.0}) for(double v:{0.0,.27,.8,1.0}) {
+        assert(sample_texture_lod(checker,mip,u,v,0)==sample_texture(checker,u,v));
+        const auto filtered=sample_texture_lod(checker,mip,u,v,3);
+        assert(std::abs(filtered[0]-.5)<.005 && filtered[3]==1);
+        const auto a=sample_texture_lod(checker,mip,u,v,.999999);
+        const auto b=sample_texture_lod(checker,mip,u,v,1.000001);
+        assert(std::abs(a[0]-b[0])<.00001);
+    }
+    const Texture odd{3,1,{0,0,0,0, 255,255,255,255, 0,0,0,0}};
+    const auto small=make_texture_mipmaps(odd,false);
+    assert(small.levels.back().width==1);
+    const auto value=sample_texture_lod(odd,small,.5,.5,100,false);
+    assert(value[0]>.2 && value[0]<.5);
+}
+
 static void test_selective_texture_samples_match_rgba_exactly() {
     const Texture gray{3,2,{0,0,0,1, 127,127,127,255, 255,255,255,81,
                             83,83,83,91, 19,19,19,12, 213,213,213,250}};
@@ -514,6 +559,8 @@ static void test_rock_roughness_changes_shading_without_changing_geometry() {
 }
 
 int main() {
+    test_adaptive_mesh_budgets_and_relief_transition();
+    test_texture_mipmaps_reduce_subpixel_contrast();
     test_selective_texture_samples_match_rgba_exactly();
     test_selective_texture_samples_reject_invalid_inputs();
     test_ring_optics_are_bounded_and_distinguish_the_transmitted_face();

@@ -23,6 +23,8 @@ public:
     SceneSnapshot snapshot() const { return simulation_->snapshot(); }
     std::optional<SceneSnapshot> reference_snapshot() const;
     const std::vector<CollisionEvent>& observed_events() const { return observed_events_; }
+    std::size_t checkpoint_count() const {return checkpoints_.size();}
+    double last_seek_origin() const {return last_seek_origin_;}
 
     void replace_project(Project project);
     void add_planet();
@@ -46,6 +48,13 @@ private:
     bool playing_ = false;
     double speed_ = 1.0;
     void record_events();
+    struct Checkpoint {
+        double time;
+        std::unique_ptr<Simulation> simulation,reference;
+    };
+    std::vector<Checkpoint> checkpoints_;
+    double last_seek_origin_=0;
+    void cache_checkpoint();
 };
 
 } // namespace planet_sandbox

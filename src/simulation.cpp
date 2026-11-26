@@ -8,6 +8,7 @@ extern "C" {
 #define restrict __restrict__
 #endif
 #include <rebound.h>
+#include <simulation.h>
 #undef restrict
 }
 
@@ -64,7 +65,7 @@ struct Simulation::Impl {
         const auto outcome = reb_collision_resolve_merge(simulation, collision);
         if (second_wins) {
             const auto found = std::find(self->identity_names.begin(), self->identity_names.end(), survivor);
-            if (found != self->identity_names.end()) simulation->particles[first].name = found->c_str();
+            if (found != self->identity_names.end()) reb_particle_set_name(&simulation->particles[first],found->c_str());
         }
         return outcome;
     }
@@ -136,6 +137,27 @@ Simulation::Simulation(const Project& project) : impl_(new Impl) {
 }
 
 Simulation::~Simulation() = default;
+Simulation::Simulation(std::unique_ptr<Impl> impl):impl_(std::move(impl)) {}
+std::unique_ptr<Simulation> Simulation::clone() const {
+    auto copy=std::make_unique<Impl>();
+    copy->simulation=reb_simulation_create();
+    if(!copy->simulation) throw std::runtime_error("Could not allocate simulation checkpoint");
+    auto warnings=REB_BINARYDATA_WARNING_NONE;
+    reb_simulation_copy_with_messages(copy->simulation,impl_->simulation,&warnings);
+    // Function pointers are intentionally omitted by REBOUND's state serialization.
+    if(int(warnings)&~int(REB_BINARYDATA_WARNING_POINTERS))
+        throw std::runtime_error("Could not copy complete simulation state");
+    copy->events=impl_->events;copy->trails=impl_->trails;copy->identity_names=impl_->identity_names;
+    copy->simulation->extras=copy.get();
+    copy->simulation->collision_resolve=&Impl::merge_collision;
+    for(std::size_t i=0;i<copy->simulation->N;++i) {
+        const std::string id=impl_->simulation->particles[i].name?impl_->simulation->particles[i].name:"";
+        const auto name=std::find(copy->identity_names.begin(),copy->identity_names.end(),id);
+        if(name==copy->identity_names.end()) throw std::runtime_error("Missing checkpoint body identity");
+        reb_particle_set_name(&copy->simulation->particles[i],name->c_str());
+    }
+    return std::unique_ptr<Simulation>(new Simulation(std::move(copy)));
+}
 
 void Simulation::advance_to(double time) {
     if (!std::isfinite(time) || time < impl_->simulation->t || time > 100000.0) {

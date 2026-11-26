@@ -1831,7 +1831,56 @@ static void test_png_writer_creates_valid_rgb_dimensions() {
     std::filesystem::remove(unicode_path);
 }
 
+static void test_integrator_checkpoint_clone_has_independent_lifetime() {
+    auto project=make_solar_system_project();
+    auto original=std::make_unique<Simulation>(project);original->advance_to(2);
+    auto clone=original->clone();assert(clone);
+    const auto first=original->snapshot(),copy=clone->snapshot();
+    assert(first.time==copy.time && first.bodies.size()==copy.bodies.size());
+    for(std::size_t i=0;i<first.bodies.size();++i) {
+        assert(first.bodies[i].id==copy.bodies[i].id && first.bodies[i].position.x==copy.bodies[i].position.x);
+    }
+    original->advance_to(3);clone->advance_to(3);
+    const auto a=original->snapshot(),b=clone->snapshot();
+    for(std::size_t i=0;i<a.bodies.size();++i) assert(std::abs(a.bodies[i].position.x-b.bodies[i].position.x)<1e-12);
+    original.reset();clone->advance_to(4);assert(clone->snapshot().bodies[3].id=="earth");
+
+    Project impact;impact.bodies={{"a","A",2,.1,{-1,0},{1,0},{}},{"b","B",1,.1,{1,0},{-1,0},{}}};
+    auto before=std::make_unique<Simulation>(impact);before->advance_to(.1);
+    auto restored=before->clone();before.reset();restored->advance_to(2);
+    assert(restored->snapshot().events.size()==1 && restored->snapshot().bodies.size()==1);
+    auto aftermath=restored->clone();restored.reset();aftermath->advance_to(3);
+    assert(aftermath->snapshot().events.size()==1 && aftermath->snapshot().events[0].contact);
+}
+
+static void test_timeline_checkpoints_restore_past_state_without_future_events() {
+    SandboxSession session(make_solar_system_project());session.begin_simulation();session.set_playing(false);
+    for(int i=0;i<24;++i) session.step(.5);
+    assert(session.checkpoint_count()>1 && session.checkpoint_count()<=16);
+    const auto original=session.snapshot();
+    session.seek(11);assert(session.last_seek_origin()>=10.5);
+    assert(session.snapshot().time==11 && session.reference_snapshot()->time==11);
+    session.seek(12);assert(session.last_seek_origin()==12);
+    const auto restored=session.snapshot();
+    for(std::size_t i=0;i<original.bodies.size();++i)
+        assert(original.bodies[i].position.x==restored.bodies[i].position.x);
+    session.seek(0);assert(session.last_seek_origin()==0 && session.snapshot().events.empty());
+    session.reset_simulation();assert(session.checkpoint_count()==1);
+    session.return_to_design();assert(session.checkpoint_count()==0);
+
+    Project impact;impact.bodies={{"a","A",2,.1,{-1,0},{1,0},{}},{"b","B",1,.1,{1,0},{-1,0},{}}};
+    SandboxSession collided(impact);collided.begin_simulation();collided.set_playing(false);
+    for(int i=0;i<8;++i) collided.step(.25);
+    assert(collided.observed_events().size()==1 && collided.snapshot().bodies.size()==1);
+    collided.seek(0);assert(collided.snapshot().events.empty() && collided.snapshot().bodies.size()==2);
+    assert(collided.observed_events().size()==1);
+    collided.seek(2);assert(collided.snapshot().events.size()==1 && collided.snapshot().bodies.size()==1);
+    assert(collided.last_seek_origin()==2);
+}
+
 int main() {
+    test_integrator_checkpoint_clone_has_independent_lifetime();
+    test_timeline_checkpoints_restore_past_state_without_future_events();
     test_16x_reference_uses_independent_grid_samples();
     test_benchmark_scenes_and_linear_error();
     test_png_writer_creates_valid_rgb_dimensions();

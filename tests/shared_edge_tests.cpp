@@ -213,7 +213,7 @@ static void test_cloud_precision_regressions() {
         {SamplingMode::MSAA4,59,100,13131,3,TraceAction::BackfaceRejected,0,{20,26,33}}
     }};
     for(const auto& probe:probes) {
-        auto c=scene.config;c.sampling=probe.mode;c.trace_x=probe.x;c.trace_y=probe.y;
+        auto c=scene.config;c.texture_filtering=false;c.adaptive_geometry=false;c.sampling=probe.mode;c.trace_x=probe.x;c.trace_y=probe.y;
         const auto frame=render_scene(scene.project,scene.snapshot,c);
         check_pixel_process(*frame.trace);
         const auto found=std::find_if(frame.trace->events.begin(),frame.trace->events.end(),

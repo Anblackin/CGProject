@@ -14,7 +14,7 @@ Image render_preview(const Project& project, const SceneSnapshot& snapshot, int 
 
 RenderFrame render_comparison_scene(const Project& project, const SceneSnapshot& snapshot,
                                     const RenderConfig& config, SamplingMode left,
-                                    SamplingMode right, bool right_first) {
+                                    SamplingMode right, bool right_first,const Project* right_project) {
     if (config.width <= 0 || config.height <= 0 || config.width > 4096 ||
         static_cast<std::size_t>(config.width) * config.height * 2u > 8000000u ||
         ((config.trace_x != -1 || config.trace_y != -1) &&
@@ -36,11 +36,11 @@ RenderFrame render_comparison_scene(const Project& project, const SceneSnapshot&
     }
     RenderFrame left_frame, right_frame;
     if (right_first) {
-        right_frame = render_scene(project, snapshot, right_config);
+        right_frame = render_scene(right_project?*right_project:project, snapshot, right_config);
         left_frame = render_scene(project, snapshot, left_config);
     } else {
         left_frame = render_scene(project, snapshot, left_config);
-        right_frame = render_scene(project, snapshot, right_config);
+        right_frame = render_scene(right_project?*right_project:project, snapshot, right_config);
     }
     RenderFrame combined;
     combined.image.width = config.width * 2;

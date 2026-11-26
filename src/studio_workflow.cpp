@@ -1,10 +1,76 @@
 #include "planet_sandbox/studio_ui.h"
 #include "planet_sandbox/impact_visual.h"
+#include "planet_sandbox/planet_visual.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace planet_sandbox {
+
+void capture_studio_design_reference(StudioState& state) {
+    if(state.session.mode()!=SessionMode::Design || !state.design_view || state.camera_transition || state.compare_baseline || state.compare_modes) return;
+    const auto& body=state.session.project().bodies[state.selected];
+    state.design_reference=body.design;state.design_reference_id=body.id;
+    ++state.scene_generation;state.notice="Reference captured. Compare it after your edits.";
+}
+
+std::vector<std::pair<Vec2,Vec2>> studio_brush_outline(const StudioRenderInput& input,const RenderFrame& frame,
+                                                     int selected,int x,int y,double radius,SolarShapeLayer layer) {
+    std::vector<std::pair<Vec2,Vec2>> result;
+    const int width=frame.image.width,height=frame.image.height;
+    if(frame.panel_count!=1 || width!=input.config.width || height!=input.config.height ||
+       x<0 || y<0 || x>=width || y>=height || selected<0 || selected>=int(input.project.bodies.size()) ||
+       frame.body_index.size()!=std::size_t(width)*height || frame.surface_uv.size()!=frame.body_index.size() ||
+       !std::isfinite(radius) || radius<=0 || radius>3.14159) return result;
+    const auto pick=std::size_t(y)*width+x;
+    if(frame.body_index[pick]!=selected || frame.surface_uv[pick].x<0) return result;
+    const auto& spec=input.project.bodies[selected];
+    const auto found=std::find_if(input.snapshot.bodies.begin(),input.snapshot.bodies.end(),[&](const auto& b){return b.id==spec.id;});
+    if(found==input.snapshot.bodies.end()) return result;
+    constexpr double pi=3.14159265358979323846,tangent=.41421356237309503;
+    using V=VisualVector;
+    const auto dot=[](V a,V b){return a.x*b.x+a.y*b.y+a.z*b.z;};
+    const auto unit=[&](V a){const auto length=std::sqrt(dot(a,a));return V{a.x/length,a.y/length,a.z/length};};
+    const auto uv=frame.surface_uv[pick];
+    const double theta=pi*uv.y,phi=2*pi*uv.x;
+    const V center{std::sin(theta)*std::cos(phi),std::cos(theta),std::sin(theta)*std::sin(phi)};
+    const V along{-std::sin(phi),0,std::cos(phi)};
+    const V across{center.y*along.z-center.z*along.y,center.z*along.x-center.x*along.z,center.x*along.y-center.y*along.x};
+    const auto& camera=input.config.camera;
+    const V direction{std::sin(camera.yaw)*std::cos(camera.pitch),std::sin(camera.pitch),std::cos(camera.yaw)*std::cos(camera.pitch)};
+    const V right{std::cos(camera.yaw),0,-std::sin(camera.yaw)};
+    const V up{-std::sin(camera.yaw)*std::sin(camera.pitch),std::cos(camera.pitch),-std::cos(camera.yaw)*std::sin(camera.pitch)};
+    const double distance=input.project.view_extent*1.35/tangent*camera.zoom,image_scale=height/(2*tangent);
+    const V eye{camera.target.x+direction.x*distance,camera.target.y+direction.y*distance,direction.z*distance};
+    const auto rotation=body_surface_rotation(spec.kind,spec.appearance.seed,spec.design.axis_tilt_offset,input.snapshot.time);
+    const double body_radius=found->radius*input.project.display_scale*(input.project.solar_system?spec.display_radius/spec.radius:1);
+    std::array<std::optional<Vec2>,97> points;
+    for(int i=0;i<=96;++i) {
+        const double angle=2*pi*i/96,ca=std::cos(angle)*std::sin(radius),sa=std::sin(angle)*std::sin(radius);
+        const V local{center.x*std::cos(radius)+along.x*ca+across.x*sa,
+                      center.y*std::cos(radius)+along.y*ca+across.y*sa,
+                      center.z*std::cos(radius)+along.z*ca+across.z*sa};
+        const double u=std::atan2(local.z,local.x)/(2*pi),v=std::acos(std::clamp(local.y,-1.0,1.0))/pi;
+        const double relief=solar_shape_multiplier(spec.kind,u,v,spec.design,layer);
+        const V normal=rotation.to_world(local);
+        const V world{found->position.x+normal.x*body_radius*relief,found->position.y+normal.y*body_radius*relief,normal.z*body_radius*relief};
+        const V toward{eye.x-world.x,eye.y-world.y,eye.z-world.z};
+        const double depth=dot(toward,direction);
+        if(depth<=.05 || dot(normal,toward)<=0) continue;
+        const V relative{world.x-eye.x,world.y-eye.y,world.z-eye.z};
+        const Vec2 screen{width*.5+dot(relative,right)*image_scale/depth,height*.5-dot(relative,up)*image_scale/depth};
+        const int px=static_cast<int>(screen.x),py=static_cast<int>(screen.y);
+        if(px<0 || py<0 || px>=width || py>=height) continue;
+        const auto p=std::size_t(py)*width+px;
+        if(frame.body_index[p]!=selected || frame.surface_uv[p].x<0) continue;
+        const auto visible=frame.surface_uv[p];
+        const V seen{std::sin(pi*visible.y)*std::cos(2*pi*visible.x),std::cos(pi*visible.y),std::sin(pi*visible.y)*std::sin(2*pi*visible.x)};
+        if(dot(unit(local),seen)<std::cos(.14)) continue;
+        points[i]=screen;
+    }
+    for(int i=1;i<=96;++i) if(points[i-1] && points[i]) result.push_back({*points[i-1],*points[i]});
+    return result;
+}
 
 StudioWorkflow studio_workflow(const StudioState& state) {
     const auto& name = state.session.project().bodies[state.selected].name;

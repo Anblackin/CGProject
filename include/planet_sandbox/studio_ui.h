@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace planet_sandbox {
 
@@ -63,6 +64,7 @@ struct StudioRenderInput {
     Project project;
     SceneSnapshot snapshot;
     RenderConfig config;
+    std::optional<Project> reference_project;
 };
 
 struct StudioFrameCache {
@@ -131,6 +133,9 @@ struct StudioState {
     };
     std::optional<CollisionReplay> collision_replay;
     bool compare_baseline = false;
+    bool compare_design = false;
+    std::optional<DesignOverrides> design_reference;
+    std::string design_reference_id;
     bool show_reference_orbit = true;
     double timeline_horizon = 80.0;
     bool compare_modes = false;
@@ -195,6 +200,9 @@ std::vector<StudioBodyMarker> studio_body_markers(const RenderFrame& frame, int 
 bool studio_scene_annotations_visible(const StudioState& state);
 
 StudioRenderInput make_studio_render_input(const StudioState& state);
+void capture_studio_design_reference(StudioState& state);
+std::vector<std::pair<Vec2,Vec2>> studio_brush_outline(const StudioRenderInput& input,const RenderFrame& frame,
+                                                     int selected,int x,int y,double radius,SolarShapeLayer layer);
 RenderFrame render_studio_frame(const StudioState& state, const StudioRenderInput& input);
 // Uses displayed renders for timing (process recording off), then restores the
 // selected pixel's detailed history with one untimed render and caches it.

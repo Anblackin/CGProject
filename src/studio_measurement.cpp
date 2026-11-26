@@ -25,6 +25,9 @@ std::string measurement_key(const StudioState& state, const StudioRenderInput& i
     const auto& config = input.config;
     add(config.width); add(config.height);
     add(config.impact_effects);
+    add(config.texture_filtering);
+    add(config.adaptive_geometry);
+    add(config.preview_light);add(config.light_azimuth);add(config.light_elevation);add(input.reference_project.has_value());
     add(config.camera.yaw); add(config.camera.pitch); add(config.camera.zoom);
     point(config.camera.target);
     add(state.compare_modes ? state.compare_left : config.sampling);
@@ -115,6 +118,10 @@ std::string context_key(const StudioState& state, const StudioRenderInput& input
     add(state.render.sampling); add(state.compare_left); add(state.compare_right);
     add(input.config.width); add(input.config.height);
     add(input.config.impact_effects);
+    add(input.config.texture_filtering);
+    add(input.config.adaptive_geometry);
+    add(input.config.preview_light);add(input.config.light_azimuth);add(input.config.light_elevation);
+    add(input.reference_project.has_value());
     add(input.project.view_extent); add(input.project.display_scale); add(input.project.solar_system);
     add(state.show_reference_orbit);
     for (const auto& body : input.project.bodies) {
@@ -143,7 +150,10 @@ const RenderFrame& update_studio_frame(StudioState& state, const StudioRenderInp
     if (needs_render) {
         // The timed image is the displayed image: no extra benchmark render.
         // Alternating sides avoids always giving one method the same execution order.
-        cache.frame = state.compare_modes
+        cache.frame = input.reference_project
+            ? render_comparison_scene(*input.reference_project,input.snapshot,config,
+                config.sampling,config.sampling,result.completed_runs%2!=0,&input.project)
+            : state.compare_modes
             ? render_comparison_scene(input.project, input.snapshot, config,
                 state.compare_left, state.compare_right, result.completed_runs % 2 != 0)
             : render_scene(input.project, input.snapshot, config);
